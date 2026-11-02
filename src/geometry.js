@@ -325,7 +325,9 @@ export function exportDxf(job) {
   add(0,'SECTION');add(2,'ENTITIES');
   const point=(v,xCode=10)=>{add(xCode,v.x);add(xCode+10,v.y);add(xCode+20,0);};
   for(const original of job.curves) {
-    let c=original;
+    // Individual costing exports contain intentional cuts. Do not let a
+    // recovered FORMAT/reference layer hide that geometry on its next import.
+    let c=job.contours&&(job.manual||original.cutIntent==='cut')?{...original,layer:'CUT'}:original;
     if(c.kind==='spline'){
       add(0,'SPLINE');add(100,'AcDbEntity');add(8,c.layer||'0');add(100,'AcDbSpline');add(210,0);add(220,0);add(230,1);
       add(70,(c.closed?1:0)|8|(c.weights?4:0));add(71,c.degree);add(72,c.knots.length);add(73,c.controlPoints.length);add(74,0);

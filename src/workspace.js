@@ -9,7 +9,7 @@ export function tagResult(result,fileId){
  const curves=(result.curves||[]).map(tag),jobs=(result.jobs||[]).map(j=>({...j,fileId,curves:j.curves.map(tag),contours:j.contours.map(c=>({...c,curves:c.curves.map(tag)}))}));
  const importErrors=result.importErrors||result.errors?.filter(e=>!/branching cut network|Intersecting, touching|No supported cutting|Overlapping outlines/.test(e))||[];
  const tagId=id=>id.startsWith(prefix)?id:prefix+id;
- return {...result,curves,jobs,importErrors,cutCurves:result.cutCurves?.map(tag),ignoredCurves:result.ignoredCurves?.map(tag),ignoredGroups:result.ignoredGroups?.map(g=>({...g,ids:g.ids.map(tagId)})),annotations:result.annotations?.map(a=>({...a,id:tagId(a.id)}))};
+  return {...result,curves,jobs,importErrors,cutCurves:result.cutCurves?.map(tag),ignoredCurves:result.ignoredCurves?.map(tag),ignoredGroups:result.ignoredGroups?.map(g=>({...g,ids:g.ids.map(tagId)})),frameCandidates:result.frameCandidates?.map(g=>({...g,ids:g.ids.map(tagId)})),manualErrors:result.manualErrors?.map(g=>({...g,ids:g.ids.map(tagId)})),annotations:result.annotations?.map(a=>({...a,id:tagId(a.id)}))};
 }
 export function migrateWorkspace(w){
  if(!w)return w;
@@ -20,14 +20,14 @@ export function migrateWorkspace(w){
  }).map((j,i)=>/^Job \d+$/.test(j.name)?{...j,name:'Job '+String(i+1).padStart(2,'0')}:j);return {...w,files,jobs};
 }
 const INPUTS=['name','material','thickness','quantity','kgRate','weightOverride','lengthOverride','piercingsOverride','included'];
-export function preserveJobInputs(jobs,previous,defaultThickness=10){
+export function preserveJobInputs(jobs,previous,defaultThickness=10,{preserveUnmatched=false}={}){
  const used=new Set(),geometry=new Map(previous.map(j=>[j.id,new Set(j.curves.map(signature))]));return jobs.map(j=>{
   const ids=new Set(j.curves.map(c=>c.id));let best=null,score=0;
   for(const old of previous){if(used.has(old.id))continue;const overlap=old.curves.filter(c=>ids.has(c.id)).length,ratio=overlap/Math.max(j.curves.length,old.curves.length);if(ratio>score){score=ratio;best=old;}}
   // Early saved projects predate stable curve identifiers. Match the actual
   // geometry when IDs changed, so an automatic recheck retains factory inputs.
   if(score<.45){const keys=j.curves.map(signature);for(const old of previous){if(used.has(old.id))continue;const overlap=keys.filter(k=>geometry.get(old.id).has(k)).length,ratio=overlap/Math.max(j.curves.length,old.curves.length);if(ratio>score){score=ratio;best=old;}}}
-  if(!best||score<.45)return {...j,thickness:defaultThickness,reviewed:false};used.add(best.id);
+  if(!best||score<.45)return {...j,...(preserveUnmatched?{}:{thickness:defaultThickness}),reviewed:false};used.add(best.id);
   const areaMatches=j.area===null?best.area===null:best.area!==null&&Math.abs(j.area-best.area)<Math.max(.00001,Math.abs(j.area)*1e-9);
   const exact=score===1&&Math.abs(j.length-best.length)<1e-6&&j.piercings===best.piercings&&areaMatches;
   return {...j,...Object.fromEntries(INPUTS.map(k=>[k,best[k]])),name:/^Job \d+$/.test(best.name)?j.name:best.name,...(exact?{reviewed:best.reviewed}:{reviewed:false,lengthOverride:null,piercingsOverride:null,weightOverride:null})};

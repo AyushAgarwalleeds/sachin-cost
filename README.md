@@ -31,6 +31,15 @@ Open http://127.0.0.1:4173/. Do not open index.html directly. `npm test` runs re
 
 Filenames follow `16mm ms 1nos.dxf`, with collisions numbered `16mm ms 1nos 1.dxf`, `16mm ms 1nos 2.dxf`, and so on. The ZIP includes a CSV manifest. Manual pricing overrides do not change geometry.
 
+## Correct detection in the preview
+
+- **Select**: click a line to highlight it in orange. Shift-click adds/removes elements. **Delete selected** (or Delete on the focused preview) removes the selection; clicking alone never deletes. **Ignore selected** excludes geometry without deleting it. Undo retains the previous geometry and pricing inputs.
+- **Box job**: drag around a whole part and its holes, then click **Make job**. Only fully enclosed curves are selected. Recognised formatting is omitted by default. Enable **Include ignored geometry in box selection** before dragging to recover intentionally ignored shapes. Select one source drawing when multiple files overlap.
+- A manual job persists through recalculation, saving and backup restore. It replaces the affected detected jobs; remaining geometry from a split job is ignored so former holes do not become extra charged parts. Multiple disconnected profiles can deliberately be grouped as one job.
+- **Use only manual jobs in this drawing** excludes all remaining automatic geometry after you have boxed the jobs you need. Undo reverses it. **Re-detect jobs** resets manual membership and cut/ignore choices for automatic extraction again.
+- Sheet/FORMAT/title/reference metadata is excluded before nesting. A rectangle around multiple detailed parts can be recognised as a sheet frame. Ambiguous rectangles show **Highlight frame** and **Ignore this frame** actions instead of assuming every rectangle is formatting. Normal rectangular parts with holes are retained.
+- Open geometry needs the explicit **Allow open cutting paths** choice. Invalid intersections still block quotation. Breaking an existing outline is flagged for repair or an explicit ignore/cut decision.
+
 ## Confirmed pricing
 
 Length is **millimetres**, as specified:

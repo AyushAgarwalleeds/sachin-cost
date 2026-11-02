@@ -1,13 +1,14 @@
 import {analyzeCurves,buildContours,boundsOf,sampleCurve,curvePoint,curveArea,curveLength,reverseCurve,dist,TAU} from './geometry.js';
 import {nodeEndpointJunctions} from './junctions.js';
+import {makeManualJob} from './manual-jobs.js';
 
-export const ANALYSIS_VERSION=4;
+export const ANALYSIS_VERSION=5;
 const contains=(a,b,t=1e-5)=>a.minX<=b.minX+t&&a.maxX>=b.maxX-t&&a.minY<=b.minY+t&&a.maxY>=b.maxY-t;
 const box=cs=>boundsOf(cs.flatMap(c=>sampleCurve(c,.05)));
 const pad=(b,d)=>({...b,minX:b.minX-d,minY:b.minY-d,maxX:b.maxX+d,maxY:b.maxY+d});
 const gap=(a,b)=>Math.hypot(Math.max(0,a.minX-b.maxX,b.minX-a.maxX),Math.max(0,a.minY-b.maxY,b.minY-a.maxY));
 function groupBy(items,key){const map=new Map();for(const item of items){const k=key(item);if(!map.has(k))map.set(k,[]);map.get(k).push(item);}return map;}
-const nonCut=/\b(center|centre|dim(?:ension)?s?|text|annotation|construction|defpoints|border|title|bend(?:ing)?|fold|reference|phantom)\b/i;
+const nonCut=/\b(center|centre|dim(?:ension)?s?|text|annotation|construction|defpoints|border|title|titleblock|format|sheet|bend(?:ing)?|fold|reference|phantom|hidden)\b/i;
 const forceCut=c=>c.cutIntent==='cut';
 const rectangle=c=>c.closed&&c.curves.every(e=>e.kind==='line'&&(Math.abs(e.a.x-e.b.x)<1e-6||Math.abs(e.a.y-e.b.y)<1e-6))&&Math.abs(c.area-c.bounds.width*c.bounds.height)<Math.max(1e-6,c.area*1e-8);
 function signedArea(cs){const o=curvePoint(cs[0],0);return cs.reduce((s,c)=>s+curveArea(c.kind==='line'?{...c,a:{x:c.a.x-o.x,y:c.a.y-o.y},b:{x:c.b.x-o.x,y:c.b.y-o.y}}:c.kind==='spline'?{...c,controlPoints:c.controlPoints.map(v=>({x:v.x-o.x,y:v.y-o.y}))}:{...c,c:{x:c.c.x-o.x,y:c.c.y-o.y}}),0);}
@@ -76,6 +77,18 @@ function outlineText(curves,groups){
 
 export function prepareDrawing(input,options={}){
  const tolerance=options.tolerance??.01,ignored=new Map();let source=(input.curves||[]).map(c=>c.id?c:{...c,id:crypto.randomUUID()});
+ const manualSource=source.filter(c=>c.manualJobId&&c.cutIntent!=='ignore');
+ if(manualSource.length){
+  const manualIds=new Set(manualSource.map(c=>c.id)),automatic=prepareDrawing({...input,curves:source.filter(c=>!manualIds.has(c.id))},options),jobs=[...automatic.jobs],errors=[...automatic.errors],manualErrors=[];
+  for(const [id,cs]of groupBy(manualSource,c=>c.manualJobId)){
+   try{jobs.push(makeManualJob(cs,{tolerance,id,allowOpen:cs.every(c=>c.manualJobAllowOpen===true)}));}
+   catch(error){const message='Manual job needs attention: '+error.message;errors.push(message);manualErrors.push({id,ids:cs.map(c=>c.id),message});}
+  }
+  const integrity=analyzeCurves([...automatic.cutCurves,...manualSource],{tolerance});
+  for(const error of integrity.errors)if(!errors.includes(error))errors.push(error);
+  const normalized=new Map(automatic.curves.map(c=>[c.id,c]));
+  return {...automatic,curves:source.filter(c=>manualIds.has(c.id)).concat([...normalized.values()]),cutCurves:[...automatic.cutCurves,...manualSource],jobs:jobs.map((j,i)=>({...j,name:'Job '+String(i+1).padStart(2,'0')})),errors,manualErrors};
+ }
  const allGroups=drawingGroups(source,tolerance),text=outlineText(source,allGroups);
  const ignore=(c,reason)=>{if(!forceCut(c))ignored.set(c.id,reason);};
  for(const c of source){if(c.cutIntent==='ignore')ignored.set(c.id,'Marked as non-cutting');else if(!forceCut(c)&&nonCut.test(String(c.layer||'').replaceAll('_',' ')+' '+String(c.lineType||'').replaceAll('_',' ')+' '+(c.blockName||'')))ignore(c,'Reference / annotation layer or line type');}
@@ -83,12 +96,18 @@ export function prepareDrawing(input,options={}){
  const junctions=nodeEndpointJunctions(source.filter(c=>!ignored.has(c.id)),tolerance);
  source=source.flatMap(c=>junctions.replacements?.get(c.id)||[c]);
  const remaining=()=>source.filter(c=>!ignored.has(c.id));
- const availableBeforeFrames=remaining(),originalComponents=buildContours(availableBeforeFrames,tolerance).contours,initial=buildContours(profileBoundary(availableBeforeFrames,tolerance).curves,tolerance).contours,rects=initial.filter(rectangle);
+ const availableBeforeFrames=remaining(),originalComponents=buildContours(availableBeforeFrames,tolerance).contours,initial=buildContours(profileBoundary(availableBeforeFrames,tolerance).curves,tolerance).contours,rects=initial.filter(rectangle),frameCandidates=[];
+ const nestedChildren=new Map(),ordered=initial.filter(c=>c.closed).sort((a,b)=>a.area-b.area);
+ for(let i=0;i<ordered.length;i++)for(let j=i+1;j<ordered.length;j++){const child=ordered[i],parent=ordered[j];if(parent.area>child.area&&contains(parent.bounds,child.bounds)){if(!nestedChildren.has(parent))nestedChildren.set(parent,[]);nestedChildren.get(parent).push(child);break;}}
  const eraseFrame=(r,reason)=>{for(const component of originalComponents)if(component.curves.some(c=>r.curves.some(e=>e.id===c.id))&&component.curves.every(c=>c.kind==='line'))component.curves.forEach(c=>ignore(c,reason));};
  for(const r of rects){
   if(r.curves.some(forceCut))continue;
   const glyphs=text.filter(g=>contains(r.bounds,g.bounds)),inside=initial.filter(c=>c!==r&&c.closed&&contains(r.bounds,c.bounds));
   const native=(input.annotations||[]).filter(a=>a.text&&contains(r.bounds,{minX:a.position.x,maxX:a.position.x,minY:a.position.y,maxY:a.position.y}));
+  const children=nestedChildren.get(r)||[],profiled=children.filter(c=>c.curves.some(e=>!['circle','ellipse'].includes(e.kind))),detailed=profiled.filter(c=>(nestedChildren.get(c)||[]).length);
+  const framed=profiled.length>=2&&(detailed.length>=2||detailed.length>=1&&native.length>=1);
+  if(framed)eraseFrame(r,'Sheet frame surrounding separate detailed parts');
+  else if(profiled.length&&r.curves.every(c=>!forceCut(c)))frameCandidates.push({ids:r.curves.map(c=>c.id),bounds:r.bounds,reason:'Possible sheet frame around internal profiles. Ignore it if it is drawing formatting.'});
   if(native.length>=12&&inside.filter(c=>!rectangle(c)&&c.curves.some(e=>e.kind!=='circle')).length>=2)eraseFrame(r,'Drawing sheet border / title grid');
   if(glyphs.length>=5&&!inside.some(c=>!rectangle(c)&&c.area>r.area*.02)){r.curves.forEach(c=>ignore(c,'Label box around outline text'));for(const g of allGroups)if(contains(r.bounds,g.bounds))g.curves.forEach(c=>ignore(c,'Outline lettering / drawing label'));}
  }
@@ -108,12 +127,15 @@ export function prepareDrawing(input,options={}){
  for(const c of available)if(!boundaryIds.has(c.id)&&!forceCut(c))ignore(c,unresolved.some(p=>p.curves.some(v=>v.id===c.id))?'Unclosed profile — repair or explicitly include':'Open reference / centre / bend line');
  // Holes inside an unfinished outline must not become independently priced jobs.
  for(const c of boundary.curves)if(!forceCut(c)&&unresolved.some(p=>contains(p.bounds,box([c]))))ignore(c,'Inside an unclosed profile — inspect the outside boundary');
+ const editedBroken=[...groupBy(source.filter(c=>c.repairProfileId&&c.cutIntent!=='ignore'),c=>c.repairProfileId).values()].filter(cs=>cs.some(c=>!boundaryIds.has(c.id)&&!forceCut(c)));
+ for(const cs of editedBroken)for(const c of cs)ignore(c,'Unclosed profile after editing — repair or explicitly include');
  const cut=source.filter(c=>!ignored.has(c.id)&&(boundaryIds.has(c.id)||forceCut(c))),persistent=(input.importErrors||[]).filter(e=>!/^Unsupported (VIEWPORT|LEADER|MLEADER|MULTILEADER|TEXT|MTEXT|DIMENSION|POINT)\b/.test(e)&&!/^\d+ unclosed profiles? (?:needs?|need) repair/.test(e));
  const result=analyzeCurves(cut,{...options,skipTopology:false,importErrors:persistent,annotationCount:input.annotationCount||0,issues:[]});
  if(!cut.length)result.errors=result.errors.filter(e=>e!=='No supported cutting geometry found.');
  if(unresolved.length)result.errors.push(`${unresolved.length} unclosed profile${unresolved.length===1?' needs':'s need'} repair or an explicit cutting decision. They are excluded from costing.`);
+ if(editedBroken.length)result.errors.push('Edited job has an incomplete profile. Undo, repair it in CAD, or ignore its remaining geometry.');
  const groups=[...groupBy(source.filter(c=>ignored.has(c.id)),c=>ignored.get(c.id)).entries()].map(([reason,curves])=>({reason,count:curves.length,length:curves.reduce((s,c)=>s+curveLength(c),0),ids:curves.map(c=>c.id)}));
- return {...input,...result,curves:source,cutCurves:cut,ignoredCurves:source.filter(c=>ignored.has(c.id)).map(c=>({...c,ignoreReason:ignored.get(c.id)})),ignoredGroups:groups,unresolvedProfiles:unresolved.length,junctionCount:junctions.junctionCount,analysisVersion:ANALYSIS_VERSION,
+ return {...input,...result,curves:source,cutCurves:cut,ignoredCurves:source.filter(c=>ignored.has(c.id)).map(c=>({...c,ignoreReason:ignored.get(c.id)})),ignoredGroups:groups,frameCandidates:frameCandidates.filter(g=>g.ids.every(id=>!ignored.has(id))),unresolvedProfiles:unresolved.length,junctionCount:junctions.junctionCount,analysisVersion:ANALYSIS_VERSION,
   unit:input.unit||result.unit,detectedUnit:input.detectedUnit,layers:input.layers||result.layers,duplicates:input.duplicates||0,
   detectionNotes:[...(junctions.junctionCount?[`${junctions.junctionCount} endpoint-on-edge junction${junctions.junctionCount===1?'':'s'} recognised. Exact curve lengths are retained; dangling extensions are excluded.`]:[]),...(boundary.recovered?[`${boundary.recovered} outside profile${boundary.recovered===1?'':'s'} recovered from bend / shared-line networks. Verify those boundaries before quoting.`]:[]),...(text.length?['Outline lettering detected. Use Show ignored to inspect formatting or restore intentional lettering cuts.']:[])],
   issues:[...(input.issues||[]).filter(e=>!/annotation entities ignored/.test(e)),...result.issues,...(groups.length?[`${source.length-cut.length} drawing elements excluded from costing.`]:[])]};

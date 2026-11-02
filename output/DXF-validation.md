@@ -1,4 +1,4 @@
-# Factory DXF detection — version 2.2
+# Factory DXF detection — version 2.3
 
 The default preview shows cutting jobs only; Show ignored reveals excluded geometry. The calculator separates cutting profiles from sheet formatting before job extraction and intersection checks. Ignored geometry is shown grey and does not enter costing. **Delete ignored items** removes it in one click; **Undo cleanup** restores it. **Inspect ignored items → Restore as cutting** recovers intentional engraving, lettering or open cuts. The original files in D:\DXF remain unchanged.
 
@@ -9,7 +9,7 @@ The default preview shows cutting jobs only; Show ignored reveals excluded geome
 | Retainer clamp / trailing arm | Sheet border/title grid and open references excluded; **20 closed profiles** recovered. Check that all nested profiles are intended manufacturing parts and set quantities/thickness individually. |
 | bending line | **1 outside job, 11 holes, 12 starts**. Six bend/reference/micro elements excluded. Cutting length approximately **2,154.191068 mm**. |
 | BMW crash bar clamp | **1 job, two slots, 3 starts**. Three reference lines excluded automatically. Cutting length **356.164616 mm**. |
-| impeller LASER CUTTING | Sheet borders/references excluded; **3 closed jobs** remain. Inspect the technical views to confirm which profiles should be included. |
+| impeller LASER CUTTING | `FORMAT` layer and other borders/references excluded before nesting; **3 closed jobs**, starts **2, 2, 1**, total **4,073.481828 mm**. **83** elements excluded. This corrects the old sheet-box nesting. Inspect technical views to confirm the intended manufacturing profiles. |
 | perfect | **1 job, one hole, 2 starts**, detected automatically. A wire endpoint touches the interior of another line; the 0.038393 mm dangling overrun is excluded. Cutting length **117.917392 mm**, net area **331.953809 mm²**. No endpoint movement or invented closing segment is needed. |
 | ROTARY SCREEN (HOSPET) | **1 outside job, 48 holes, 49 starts**. Six reference/bend lines excluded. Cutting length approximately **12,554.208780 mm**. Verify the recovered outside boundary. |
 
@@ -31,3 +31,5 @@ npm test
 Private copies/audit data stay under ignored `tmp/`; they are excluded from source and deployment ZIPs.
 
 Version 2.2 recognises unambiguous endpoint-on-edge closures in simple wires. It preserves total source geometry length when splitting an edge, with dangling extensions separately classified. Gaps beyond the configured endpoint tolerance still require a cutting decision; they are not silently filled. Existing cached analyses are refreshed with reader version 4.
+
+Version 2.3 adds persistent manual job ownership, fully enclosed box selection, optional inclusion of ignored geometry, manual-only costing per drawing, and highlight-then-delete interaction. Regression cases cover formatting rectangles around detailed parts, ambiguous plain frames, ordinary rectangular hole plates, preservation of source geometry and cutting length, invalid/open manual profiles, prevention of duplicate charges, backup restore, and Undo pricing retention. Browser checks on PCTM selected its 14-curve, 554.513 mm, five-start part without the lettering caught by its bounding box.
