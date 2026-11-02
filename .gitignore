@@ -1,0 +1,11 @@
+node_modules/
+dist/
+tmp/
+*.log
+.vercel/
+.netlify/
+.env*
+!.env.example
+public/wasm/
+output/*
+!output/DXF-validation.md

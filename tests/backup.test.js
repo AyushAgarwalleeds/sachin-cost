@@ -1,0 +1,10 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { validateBackup } from '../src/backup.js';
+import { DEFAULT_SETTINGS } from '../src/costing.js';
+import { demoWorkspace } from '../src/demo.js';
+const backup=()=>({app:'sachin-cutcost',version:1,workspace:demoWorkspace(),settings:structuredClone(DEFAULT_SETTINGS),projects:[]});
+test('project backup accepts all generated sample geometry',()=>{assert.ok(validateBackup(backup()));});
+test('incomplete settings are rejected without crashing the app',()=>{const b=backup();delete b.settings.materials.MS;assert.throws(()=>validateBackup(b),/material rates/);});
+test('altered measured lengths are rejected during backup restore',()=>{const b=backup();b.workspace.jobs[0].length=1;assert.throws(()=>validateBackup(b),/does not match/);});
+test('invalid project charges are rejected',()=>{const b=backup();b.workspace.options.discount=120;assert.throws(()=>validateBackup(b),/discount/);});

@@ -1,0 +1,18 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { DEFAULT_SETTINGS as s, costJob, estimate, jobProblems } from '../src/costing.js';
+const job=(patch={})=>({id:'test',material:'MS',thickness:10,length:1000,piercings:5,quantity:1,area:100000,kgRate:100,weightOverride:null,lengthOverride:null,piercingsOverride:null,included:true,...patch});
+test('user-confirmed formula uses millimetres and adds piercing',()=>{assert.equal(costJob(job(),s).total,80005);});
+test('quantity multiplies cutting plus all piercing and material charges',()=>{const c=costJob(job({quantity:3,weightOverride:80}),s,true);assert.equal(c.material,8000);assert.equal(c.total,88005*3);});
+test('80 kg at Rs 100 per kg gives exactly Rs 8000',()=>{assert.equal(costJob(job({weightOverride:80}),s,true).material,8000);});
+test('piercing threshold: 15 mm low, 16 mm high',()=>{assert.equal(costJob(job({thickness:15}),s).piercing,5);assert.equal(costJob(job({thickness:16}),s).piercing,10);});
+test('MS SS copper aluminium rates match instruction',()=>{for(const [m,rate]of Object.entries({MS:8,SS:16,COPPER:30,ALUM:25})){assert.equal(costJob(job({material:m}),s).cutting,1000*10*rate);}});
+test('automatic net CAD weight uses mm3 to m3 conversion',()=>{assert.equal(costJob(job(),s).weight,7.85);});
+test('manual starts and length override affect cost without changing geometry',()=>{const j=job({lengthOverride:500,piercingsOverride:3});assert.equal(costJob(j,s).total,40003);assert.equal(j.length,1000);});
+test('metre pricing option changes pricing conversion only',()=>{assert.equal(costJob(job(),{...s,rateUnit:'m'}).total,85);});
+test('excluded parts contribute no cost, length or quantity',()=>{const t=estimate([job(),job({included:false,quantity:100})],s);assert.equal(t.total,80005);assert.equal(t.pieces,1);assert.equal(t.length,1000);});
+test('discount is before tax and setup is included in taxable subtotal',()=>{const t=estimate([job({length:10,piercings:0})],s,{setup:200,discount:10,tax:18});assert.equal(t.subtotal,1000);assert.equal(t.discount,100);assert.equal(t.tax,162);assert.equal(t.total,1062);});
+test('per-piece amounts round to paise before multiplying quantity',()=>{const c=costJob(job({length:1.234567,quantity:3,piercings:0}),s);assert.equal(c.unit,98.77);assert.equal(c.total,296.31);});
+test('open cuts require manual material weight only when material is included',()=>{const j=job({area:null});assert.deepEqual(jobProblems(j,s,false),[]);assert.ok(jobProblems(j,s,true).some(e=>e.includes('weight')));assert.deepEqual(jobProblems({...j,weightOverride:80},s,true),[]);});
+test('invalid thickness, fractional quantity, negative prices are rejected',()=>{assert.equal(jobProblems(job({thickness:0,quantity:1.5,kgRate:-1}),s,false).length,3);});
+test('zero price must be resolved before material-inclusive quote',()=>{assert.ok(jobProblems(job({kgRate:0}),s,true).some(e=>e.includes('price')));});

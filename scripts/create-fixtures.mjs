@@ -1,0 +1,10 @@
+import { mkdir, writeFile } from 'node:fs/promises';
+import { sampleDxf } from '../src/demo.js';
+import { demoWorkspace } from '../src/demo.js';
+import { buildQuotation, DEFAULT_QUOTE } from '../src/quotation.js';
+import { DEFAULT_SETTINGS } from '../src/costing.js';
+await mkdir('examples',{recursive:true});await mkdir('output/pdf',{recursive:true});
+await writeFile('examples/workshop-parts.dxf',sampleDxf());
+const workspace=demoWorkspace(),q={...DEFAULT_QUOTE,customer:'Sample Customer',reference:'Workshop parts - drawing review'};
+buildQuotation(workspace.jobs,DEFAULT_SETTINGS,workspace.options,q,true).save('output/pdf/sample-quotation.pdf');
+console.log('Sample CAD and quotation generated.');
