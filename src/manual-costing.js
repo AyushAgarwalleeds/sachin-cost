@@ -39,6 +39,20 @@ export function manualPartJob(row){
 }
 
 export function measureManualPart(row,settings,withMaterial,job=manualPartJob(row)){
+  for(const cutout of row.cutouts||[]){
+    const circular=cutout.shape==='circle';
+    const width=Number(cutout.width),height=circular?width:Number(cutout.height);
+    if(!Number.isFinite(width)||!Number.isFinite(height)||width<=0||height<=0||
+      width>=job.bounds.width||height>=job.bounds.height)
+      throw new Error('Each cutout must have positive dimensions smaller than the part.');
+    job={
+      ...job,
+      length:job.length+(circular?Math.PI*width:2*(width+height)),
+      area:job.area-(circular?Math.PI*width**2/4:width*height),
+      piercings:job.piercings+1
+    };
+  }
+  if(job.area<=0)throw new Error('Cutouts must leave some material in the part.');
   const problems=jobProblems(job,settings,withMaterial);
   if(problems.length)throw new Error(problems.join(' '));
   return costJob(job,settings,withMaterial);

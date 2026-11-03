@@ -2,11 +2,61 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {billBalance,billRegister,freshFirm,importContacts,parseContactCsv,partyLedger,postBill,recordPayment,validateBooksBackup} from '../src/billing-model.js';
 import {createDimension,dimensionDrawing,dimensionEntities,resolveDimension} from '../src/cad-dimensions.js';
-import {rectangleCurves} from '../src/cad-model.js';
-import {exportDxf,parseDxf} from '../src/geometry.js';
+import {identify,rectangleCurves} from '../src/cad-model.js';
+import {pointAtLength,resizeDimension} from '../src/cad-editing.js';
+import {curveLength,exportDxf,parseDxf} from '../src/geometry.js';
 import {prepareDrawing} from '../src/job-detection.js';
 import {manualPartJob,measureManualPart} from '../src/manual-costing.js';
 import {DEFAULT_SETTINGS} from '../src/costing.js';
+import {nestSheet,sheetRemnants,sheetWeight,validPlacement} from '../src/shearing.js';
+
+test('unpositioned cutouts update metre pricing, pierces and net weight',()=>{
+  const row={name:'Plate',shape:'rectangle',width:100,height:60,radius:0,holes:[],material:'MS',thickness:10,quantity:2,kgRate:0,
+    cutouts:[{shape:'rectangle',width:20,height:10},{shape:'circle',width:10}]};
+  const cost=measureManualPart(row,DEFAULT_SETTINGS,false);
+  assert.ok(Math.abs(cost.length-(380+Math.PI*10))<1e-9);
+  assert.ok(Math.abs(cost.weight-(5800-Math.PI*25)*10*7850/1e9)<1e-9);
+  assert.equal(cost.piercings,3);
+  assert.equal(cost.cutting,32.91);
+  assert.equal(cost.total,71.82);
+  assert.throws(()=>measureManualPart({...row,cutouts:[{shape:'rectangle',width:110,height:20}]},DEFAULT_SETTINGS,false),/smaller/);
+});
+
+test('driving a CAD rectangle dimension keeps the perimeter closed and the side square',()=>{
+  assert.deepEqual(pointAtLength({x:2,y:3},{x:5,y:7},50),{x:32,y:43});
+  const frame=rectangleCurves({x:0,y:0},{x:100,y:60});
+  const resized=resizeDimension(frame,frame[0],175);
+  assert.deepEqual(resized.map(curveLength),[175,60,175,60]);
+  assert.equal(prepareDrawing({curves:resized}).jobs[0].area,175*60);
+});
+
+test('blue bend DXF lines survive as a reference layer and do not contribute to length or pierces',()=>{
+  const profile=rectangleCurves({x:0,y:0},{x:100,y:60});
+  const bend=identify({kind:'line',a:{x:0,y:30},b:{x:100,y:30},layer:'BEND'});
+  const dxf=exportDxf({curves:[...profile,bend]});
+  assert.match(dxf,/8\nBEND\n62\n5\n/);
+  const result=prepareDrawing(parseDxf(dxf,{skipTopology:true}));
+  assert.equal(result.jobs.length,1);
+  assert.equal(result.jobs[0].length,320);
+  assert.equal(result.jobs[0].piercings,1);
+  assert.equal(result.ignoredCurves.filter(c=>c.layer==='BEND').length,1);
+});
+
+test('shearing nests the example, preserves leftover area and rejects overlapping moves',()=>{
+  const sheet={width:2500,height:1250};
+  const rows=[[500,500],[600,500],[800,400]].map(([width,height],id)=>({id,width,height,quantity:1}));
+  const layout=nestSheet(sheet,rows);
+  assert.equal(layout.parts.length,3);
+  assert.deepEqual(layout.unplaced,[]);
+  assert.ok(layout.parts.every(part=>validPlacement(part,sheet,layout.parts)));
+  assert.ok(Math.abs(layout.parts.reduce((sum,part)=>sum+sheetWeight(part,10,7850),0)-68.295)<1e-9);
+  const remnants=sheetRemnants(sheet,layout.parts);
+  assert.equal(remnants.reduce((sum,rect)=>sum+rect.width*rect.height,0),2255000);
+  assert.equal(remnants.every((rect,id)=>validPlacement({...rect,id},sheet,[...layout.parts,...remnants.map((item,i)=>({...item,id:i}))])),true);
+  const [a,b]=layout.parts;
+  assert.equal(validPlacement({...a,x:b.x,y:b.y},sheet,layout.parts),false);
+  assert.equal(nestSheet(sheet,[{id:'large',width:3000,height:3000,quantity:1}]).unplaced.length,1);
+});
 
 const line={description:'Cut plate',hsn:'7326',unit:'NOS',quantity:2,rate:500,discount:0,tax:18};
 const party={id:'sample',name:'Sample client',gstin:'27AAAAA0000A1Z1',address:'Sample address',state:'27 Maharashtra',email:'',phone:''};

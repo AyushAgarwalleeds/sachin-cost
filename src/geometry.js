@@ -351,7 +351,7 @@ export function exportDxf(job) {
       add(0,'SPLINE');add(100,'AcDbEntity');add(8,c.layer||'0');add(100,'AcDbSpline');add(210,0);add(220,0);add(230,1);
       add(70,(c.closed?1:0)|8|(c.weights?4:0));add(71,c.degree);add(72,c.knots.length);add(73,c.controlPoints.length);add(74,0);
       for(const k of c.knots)add(40,k);if(c.weights)for(const w of c.weights)add(41,w);for(const v of c.controlPoints)point(v);
-    }else if(c.kind==='line'){add(0,'LINE');add(8,c.layer||'0');point(c.a);point(c.b,11);}
+    }else if(c.kind==='line'){add(0,'LINE');add(8,c.layer||'0');if(c.layer?.toUpperCase()==='BEND')add(62,5);point(c.a);point(c.b,11);}
     else if(c.kind==='circle'||Math.abs(Math.abs(c.sweep)-TAU)<1e-9&&c.kind==='arc'){add(0,'CIRCLE');add(8,c.layer||'0');point(c.c);add(40,c.r);}
     else if(c.kind==='arc'){
       if(c.sweep<0)c=reverseCurve(c);

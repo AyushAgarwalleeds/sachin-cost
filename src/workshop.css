@@ -1,0 +1,23 @@
+.cutout-symbol { width: 54px; height: 44px; fill: #e5f2e4; stroke: #396a49; stroke-width: 2; }
+.cutout-list { padding: 12px; border: 1px solid #d9e6d8; border-radius: 8px; margin-bottom: 14px; }
+.shear-preview { display: block; width: 100%; max-height: 440px; touch-action: none; }
+.shear-sheet { fill: #edf3e9; }
+.shear-remnant { fill: #f5f7ef; stroke: #a6b8a0; stroke-dasharray: 4 3; }
+.shear-part { cursor: grab; }
+.shear-part rect { fill: #b6dbcb; stroke: #37705c; stroke-width: 1.5; }
+.shear-part.selected rect { fill: #84c8b1; stroke: #155744; stroke-width: 2.5; }
+.shear-part text { text-anchor: middle; dominant-baseline: central; fill: #163d31; pointer-events: none; }
+.studio-guide-tools{display:grid;gap:5px;margin:8px 0}
+.studio-guide-tools button[aria-pressed=true]{outline:2px solid #a9ce89;outline-offset:-2px}
+.studio .studio-curve.bend-line{stroke:#64adff;stroke-dasharray:8 4}
+.studio .studio-curve.bend-line.chosen{stroke:#a5d2ff}
+.studio-snap-marks{fill:none;stroke:#f7ce77;pointer-events:none}
+.studio-snap-marks :is(path,rect,circle){stroke-width:1.5;vector-effect:non-scaling-stroke}
+.studio-command.studio-exact{flex-wrap:wrap}
+.studio-command.studio-exact input{min-width:115px}
+.studio-command.studio-exact span{white-space:nowrap;font-size:12px}
+.shear-drag{fill:#68aa9b66;stroke:#227458;stroke-width:2;pointer-events:none}
+.shear-drag.invalid{fill:#e35c5c66;stroke:#a82929}
+.business-page fieldset{border:1px solid #cedfd2;border-radius:9px;margin:12px 0;padding:12px}
+.business-page legend{padding:0 6px;font-weight:700}
+.bend-sketch{width:96px;background:#f0f5f2;border-radius:8px}

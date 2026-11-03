@@ -10,6 +10,8 @@ import { getSaved, putSaved, downloadBlob } from './storage.js';
 import { validateBackup } from './backup.js';
 import CadStudio from './CadStudio.jsx';
 import ManualCosting from './ManualCosting.jsx';
+import Shearing from './Shearing.jsx';
+import Bending from './Bending.jsx';
 import BillingCentre from './BillingCentre.jsx';
 import {dimensionEntities,resolveDimension} from './cad-dimensions.js';
 import CleanupPanel from './CleanupPanel.jsx';
@@ -271,6 +273,8 @@ export default function App(){
         <button className={view==='estimate'?'active':''} onClick={()=>{setView('estimate');setMenu(false);}}><LayoutDashboard size={18}/>Cost calculator<span className="nav-active-dot"/></button>
         <button className={view==='cad'?'active':''} onClick={()=>openCad()}><Ruler size={18}/>2D CAD workspace</button>
         <button className={view==='manual'?'active':''} onClick={()=>{setView('manual');setMenu(false);}}><Ruler size={18}/>Manual costing</button>
+        <button className={view==='shearing'?'active':''} onClick={()=>{setView('shearing');setMenu(false);}}><Package size={18}/>Shearing</button>
+        <button className={view==='bending'?'active':''} onClick={()=>{setView('bending');setMenu(false);}}><Ruler size={18}/>Bending</button>
         <button className={view==='billing'?'active':''} onClick={()=>{setView('billing');setMenu(false);}}><FileText size={18}/>Billing centre</button>
         <button className={view==='communications'?'active':''} onClick={()=>{setView('communications');setMenu(false);}}><MessageCircle size={18}/>Communication centre</button>
         <button className={view==='history'?'active':''} onClick={()=>{setView('history');setMenu(false);}}><FolderClock size={18}/>Saved projects<span className="count-pill">{saved.length}</span></button>
@@ -282,7 +286,7 @@ export default function App(){
       </div>
     </aside>
     <div className="main-shell">
-      <header className="topbar"><div className="breadcrumb"><button className="icon-btn mobile-menu" onClick={()=>setMenu(!menu)} aria-label="Menu"><Menu size={20}/></button><span>Workspace</span><ChevronRight size={14}/><b>{({estimate:'Cost calculator',history:'Saved projects',settings:'Rates & settings',cad:'2D CAD workspace',communications:'Communication centre',manual:'Manual costing',billing:'Billing centre'})[view]}</b></div><div className="topbar-right"><span className={`save-state ${storageStatus.includes('failed')?'bad':''}`}><i/>{storageStatus}</span><button className="plain-button install-button" onClick={installApp}><Download size={15}/>Install app</button><span className="top-avatar">CA</span></div></header>
+      <header className="topbar"><div className="breadcrumb"><button className="icon-btn mobile-menu" onClick={()=>setMenu(!menu)} aria-label="Menu"><Menu size={20}/></button><span>Workspace</span><ChevronRight size={14}/><b>{({estimate:'Cost calculator',history:'Saved projects',settings:'Rates & settings',cad:'2D CAD workspace',communications:'Communication centre',manual:'Manual costing',shearing:'Shearing',bending:'Bending',billing:'Billing centre'})[view]}</b></div><div className="topbar-right"><span className={`save-state ${storageStatus.includes('failed')?'bad':''}`}><i/>{storageStatus}</span><button className="plain-button install-button" onClick={installApp}><Download size={15}/>Install app</button><span className="top-avatar">CA</span></div></header>
       <main>
         {view==='estimate'&&<>
           <div className="page-heading"><div><div className="eyebrow">LESS GUESSWORK. MORE PRECISION.</div><h1>Laser cutting calculator<span className="heading-dot">.</span></h1><p>From drawing to quotation, in one clear workspace.</p></div><button className="button secondary" onClick={newEstimate}><Plus size={17}/>New estimate</button></div>
@@ -368,6 +372,8 @@ export default function App(){
         {view==='history'&&<><div className="page-heading"><div><div className="eyebrow">PICK UP WHERE YOU LEFT OFF</div><h1>Saved projects<span className="heading-dot">.</span></h1><p>Stored on this device. Back up your projects to move them to another.</p></div><button className="button secondary" onClick={portableBackup}><Download size={16}/>Back up all</button></div><div className="history-grid">{saved.map(p=><article className="card history-card" key={p.id}><div className="history-preview"><CadPreview jobs={p.jobs} compact/></div><h2>{p.name}</h2><p>{p.jobs.length} jobs · {new Date(p.updatedAt).toLocaleDateString('en-IN')}</p><div><button className="button primary small" onClick={()=>openProject(p)}>Open project<ArrowUpRight size={14}/></button><button className="icon-btn" title="Remove from saved history" onClick={()=>{setSaved(a=>a.filter(x=>x.id!==p.id));notify('Removed from saved history.');}}><Trash2 size={16}/></button></div></article>)}</div>{!saved.length&&<div className="card empty-history"><FolderClock size={38}/><h2>Your next estimate starts here.</h2><p>Save the current project or create a new estimate. Previous estimates appear here.</p><button className="button primary" onClick={()=>setView('estimate')}>Go to calculator</button></div>}</>}
         {view==='cad'&&<CadStudio key={cadKey} source={cadSource} onApply={useCad} onCancel={()=>setView('estimate')} notify={notify} parseDrawing={async f=>{if(f.size>30*1024*1024)throw new Error('Drawing exceeds 30 MB.');const ext=f.name.split('.').pop().toLowerCase();if(!['dxf','dwg','pdf'].includes(ext))throw new Error('Choose a DXF or DWG.');return parse(ext!=='dxf'?await f.arrayBuffer():await f.text(),ext);}}/>}
         {view==='manual'&&<ManualCosting settings={settings} busy={busy} onEstimate={createManualEstimate}/>}
+        {view==='shearing'&&<Shearing settings={settings}/>}
+        {view==='bending'&&<Bending settings={settings}/>}
         {view==='billing'&&<BillingCentre settings={settings}/>}
         {view==='communications'&&<CommunicationCenter notify={notify} onShare={record=>{setShareRecord(record);setModal('share');}}/>}
         {view==='settings'&&<Settings settings={settings} setSettings={setSettings} notify={notify} onBackup={portableBackup} onRestore={()=>backupInput.current.click()}/>}

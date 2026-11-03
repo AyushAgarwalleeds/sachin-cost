@@ -17,9 +17,13 @@ export function nearestOnCurve(c,p){
  let lo=Math.max(0,best-1/steps),hi=Math.min(1,best+1/steps);for(let i=0;i<55;i++){const a=lo+(hi-lo)/3,b=hi-(hi-lo)/3;if(dist(curvePoint(c,a),p)<dist(curvePoint(c,b),p))hi=b;else lo=a;}const t=(lo+hi)/2,point=curvePoint(c,t);return {point,t,distance:dist(point,p)};
 }
 export function hitCurve(curves,p,tolerance){let best=null;for(const c of curves){const b=curveBounds(c);if(p.x<b.minX-tolerance||p.x>b.maxX+tolerance||p.y<b.minY-tolerance||p.y>b.maxY+tolerance)continue;const n=nearestOnCurve(c,p);if(n.distance<=tolerance&&(!best||n.distance<best.distance))best={...n,curve:c};}return best;}
+export function curveSnapPoints(c){
+ if(c.kind==='circle')return [{point:c.c,kind:'center'},...[0,.25,.5,.75].map(t=>({point:curvePoint(c,t),kind:'quadrant'}))];
+ return [{point:curvePoint(c,0),kind:'endpoint'},{point:curvePoint(c,1),kind:'endpoint'},{point:curvePoint(c,.5),kind:'midpoint'},...(c.c?[{point:c.c,kind:'center'}]:[])];
+}
 export function snapPoint(p,curves,{grid=1,gridEnabled=false,objectEnabled=true,tolerance=2,ortho=false,anchor=null,nearest=false}={}){
  let point={...p},kind='';
- if(objectEnabled){let best=Infinity;for(const c of curves){const points=c.kind==='circle'?[{point:c.c,kind:'center'},...[0,.25,.5,.75].map(t=>({point:curvePoint(c,t),kind:'quadrant'}))]:[{point:curvePoint(c,0),kind:'endpoint'},{point:curvePoint(c,1),kind:'endpoint'},{point:curvePoint(c,.5),kind:'midpoint'},...(c.c?[{point:c.c,kind:'center'}]:[])];for(const candidate of points){const d=dist(p,candidate.point);if(d<best&&d<tolerance){best=d;point=candidate.point;kind=candidate.kind;}}}}
+ if(objectEnabled){let best=Infinity;for(const c of curves){for(const candidate of curveSnapPoints(c)){const d=dist(p,candidate.point);if(d<best&&d<tolerance){best=d;point=candidate.point;kind=candidate.kind;}}}}
  if(objectEnabled){const nearby=curves.filter(c=>{const b=curveBounds(c);return p.x>=b.minX-tolerance&&p.x<=b.maxX+tolerance&&p.y>=b.minY-tolerance&&p.y<=b.maxY+tolerance;}).slice(0,24);let best=kind?dist(point,p):tolerance;for(let i=0;i<nearby.length;i++)for(let j=i+1;j<nearby.length;j++)for(const q of intersections(nearby[i],nearby[j]))if(dist(q,p)<best){point=q;best=dist(q,p);kind='intersection';}if(nearest&&!kind)for(const c of nearby){const n=nearestOnCurve(c,p);if(n.distance<best){point=n.point;best=n.distance;kind='nearest';}}}
  if(!kind&&gridEnabled&&grid>0){point={x:Math.round(p.x/grid)*grid,y:Math.round(p.y/grid)*grid};kind='grid';}
  if(ortho&&anchor){point=Math.abs(point.x-anchor.x)>=Math.abs(point.y-anchor.y)?{x:point.x,y:anchor.y}:{x:anchor.x,y:point.y};kind=kind?kind+' · ortho':'ortho';}

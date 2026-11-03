@@ -1,6 +1,48 @@
 import {curvePoint,curveLength,curveArea,reverseCurve,dist,TAU} from './geometry.js';
 import {identify} from './cad-model.js';
 
+export function pointAtLength(start,direction,length){
+ const distance=dist(start,direction);
+ if(!Number.isFinite(length)||length<=0)throw new Error('Enter a positive length in millimetres.');
+ if(distance<1e-9)throw new Error('Move the cursor to set a direction first.');
+ return {x:start.x+(direction.x-start.x)*length/distance,y:start.y+(direction.y-start.y)*length/distance};
+}
+
+export function resizeDimension(curves,target,value){
+ if(!Number.isFinite(value)||value<=0)throw new Error('Enter a positive dimension in millimetres.');
+ if(target.kind==='circle')return curves.map(c=>c.id===target.id?{...c,r:value/2}:c);
+ const ends=target.kind==='line'?[target.b]:[curvePoint(target,0),curvePoint(target,1)];
+ const joined=p=>ends.findIndex(end=>dist(end,p)<1e-7);
+ const moved=target.kind==='line'?{...target,b:pointAtLength(target.a,target.b,value)}:{...target,r:value};
+ const nextEnds=target.kind==='line'?[moved.b]:[curvePoint(moved,0),curvePoint(moved,1)];
+ if(target.kind==='line'&&target.sourceId){
+  // Keep both far corners of a drawn rectangle on the same side.
+  const group=curves.filter(c=>c.sourceId===target.sourceId&&c.layer===target.layer);
+  if(group.length===4&&group.every(c=>c.kind==='line')){
+   const near=(a,b)=>dist(a,b)<1e-7;
+   const side=group.find(c=>c.id!==target.id&&(near(c.a,target.b)||near(c.b,target.b)));
+   if(side){
+    const far=near(side.a,target.b)?side.b:side.a;
+    const oppositeCorner={x:target.a.x+far.x-target.b.x,y:target.a.y+far.y-target.b.y};
+    const opposite=group.find(c=>c!==side&&c.id!==target.id&&(near(c.a,far)&&near(c.b,oppositeCorner)||near(c.b,far)&&near(c.a,oppositeCorner)));
+    const perpendicular=(target.b.x-target.a.x)*(far.x-target.b.x)+(target.b.y-target.a.y)*(far.y-target.b.y);
+    if(opposite&&Math.abs(perpendicular)<1e-8*curveLength(target)*curveLength(side)){
+     ends.push(far);
+     nextEnds.push({x:far.x+moved.b.x-target.b.x,y:far.y+moved.b.y-target.b.y});
+    }
+   }
+  }
+ }
+ return curves.map(c=>{
+  if(c.id===target.id)return moved;
+  if(c.layer!==target.layer||c.kind==='circle')return c;
+  const a=joined(curvePoint(c,0)),b=joined(curvePoint(c,1));
+  if(a<0&&b<0)return c;
+  if(c.kind!=='line')throw new Error('This dimension joins another curved edge. Use grips to edit the connection.');
+  return {...c,a:nextEnds[a]??c.a,b:nextEnds[b]??c.b};
+ });
+}
+
 export function grips(c){
  if(c.kind==='line')return [{key:'a',point:c.a},{key:'b',point:c.b},{key:'move',point:curvePoint(c,.5)}];
  if(c.kind==='spline')return c.controlPoints.map((point,i)=>({key:'p:'+i,point}));
