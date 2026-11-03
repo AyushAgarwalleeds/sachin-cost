@@ -10,6 +10,23 @@ const rect=(x,y,w,h)=>rectangleCurves({x,y},{x:x+w,y:y+h},'0');
 const circle=(x,y,r)=>identify({kind:'circle',c:{x,y},r,start:0,sweep:TAU,layer:'0'});
 const detect=cs=>prepareDrawing(analyzeCurves(cs,{skipTopology:true}));
 
+test('recovering ignored geometry includes its outline and hole without changing another job',()=>{
+ const existing=rect(150,0,80,50);
+ const missed=[...rect(0,0,100,60),circle(50,30,10)].map(c=>({...c,cutIntent:'ignore'}));
+ const drawing=[...existing,...missed];
+ const before=detect(drawing);
+ const ids=windowCurveIds(drawing,{x:-1,y:-1},{x:101,y:61});
+ assert.throws(()=>assignManualJob(drawing,before.jobs,[...ids,existing[0].id],{preserveExisting:true}),/only part/);
+ const restored=assignManualJob(drawing,before.jobs,ids,{id:'recovered',preserveExisting:true});
+ const after=detect(restored.curves);
+ assert.deepEqual(after.errors,[]);
+ assert.equal(after.jobs.length,2);
+ const recovered=after.jobs.find(j=>j.id==='manual:recovered');
+ assert.equal(recovered.piercings,2);
+ assert.ok(Math.abs(recovered.length-320-20*Math.PI)<1e-8);
+ assert.equal(after.jobs.find(j=>!j.manual).length,before.jobs[0].length);
+});
+
 test('box selection encloses entire curves and does not clip or include crossing references',()=>{
  const part=[...rect(0,0,100,50),circle(50,25,5)],cross=identify({kind:'line',a:{x:-20,y:25},b:{x:120,y:25}}),cs=[...part,cross];
  assert.deepEqual(new Set(windowCurveIds(cs,{x:101,y:51},{x:-1,y:-1})),new Set(part.map(c=>c.id)));

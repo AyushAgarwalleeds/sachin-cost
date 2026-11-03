@@ -17,11 +17,12 @@ export function makeManualJob(curves,{tolerance=.01,allowOpen=false,id=crypto.ra
 
 // Each selected curve has a single owner. Residual geometry from a split job is
 // quarantined instead of letting its former holes become separately priced parts.
-export function assignManualJob(curves,jobs,ids,{allowOpen=false,tolerance=.01,id=crypto.randomUUID()}={}){
+export function assignManualJob(curves,jobs,ids,{allowOpen=false,tolerance=.01,id=crypto.randomUUID(),preserveExisting=false}={}){
  const picked=new Set(ids),selected=curves.filter(c=>picked.has(c.id));
  if(selected.length!==picked.size)throw new Error('Select geometry from one drawing at a time.');
- makeManualJob(selected,{allowOpen,tolerance,id});
  const touched=jobs.filter(j=>j.curves.some(c=>picked.has(c.id))),residual=new Set(touched.flatMap(j=>j.curves.filter(c=>!picked.has(c.id)).map(c=>c.id)));
+ if(preserveExisting&&residual.size)throw new Error('The box includes only part of an existing job. Adjust the box to include the whole job or leave it outside.');
+ makeManualJob(selected,{allowOpen,tolerance,id});
  return {id,residualCount:residual.size,curves:curves.map(c=>{
   if(picked.has(c.id))return {...c,cutIntent:'cut',manualJobId:id,manualJobAllowOpen:allowOpen};
   if(residual.has(c.id)){const {manualJobId,manualJobAllowOpen,...rest}=c;return {...rest,cutIntent:'ignore'};}

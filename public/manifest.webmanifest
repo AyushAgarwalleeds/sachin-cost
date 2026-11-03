@@ -1,8 +1,8 @@
 {
   "id": "/",
-  "name": "CutCost - Sachin Industries",
-  "short_name": "CutCost",
-  "description": "Laser cutting estimates and CAD jobs for Sachin Industries",
+  "name": "Cost by Ayush",
+  "short_name": "Cost by Ayush",
+  "description": "Laser cutting estimates and CAD jobs",
   "start_url": "/",
   "scope": "/",
   "display": "standalone",

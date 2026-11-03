@@ -4,7 +4,7 @@ The website runs as static files on Vercel or Netlify. Supabase supplies the man
 
 ## 1. Create the factory database
 
-Create a Supabase project for Sachin Industries. Open its SQL editor and run the complete contents of `database/supabase.sql` once. It creates the member list, costing/quotation records, team notes, access policies and realtime publication.
+Create a Supabase project for Cost by Ayush. Open its SQL editor and run the complete contents of `database/supabase.sql` once. It creates the member list, costing/quotation records, team notes, access policies and realtime publication.
 
 Use a separate project for this factory. All active members of this project can see the factory history; it is not a multi-company service.
 

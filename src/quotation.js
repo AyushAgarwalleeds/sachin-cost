@@ -3,7 +3,7 @@ import autoTable from 'jspdf-autotable';
 import { estimate, num } from './costing.js';
 
 export function freshQuote(){return {
-  title:'QUOTATION', number:`SI-${new Date().toLocaleDateString('en-CA').replaceAll('-','')}-${crypto.randomUUID().slice(0,8).toUpperCase()}`, date:new Date().toLocaleDateString('en-CA'),
+  title:'QUOTATION', number:`CA-${new Date().toLocaleDateString('en-CA').replaceAll('-','')}-${crypto.randomUUID().slice(0,8).toUpperCase()}`, date:new Date().toLocaleDateString('en-CA'),
   customer:'', customerAddress:'', customerEmail:'', customerPhone:'', reference:'', note:'',
   columns:{ material:true, thickness:true, quantity:true, dimensions:false, length:false, piercings:false, weight:false, unit:true, amount:true },
   showCompanyDetails:true, showTerms:true, showBreakdown:false, showTax:true, showNote:true

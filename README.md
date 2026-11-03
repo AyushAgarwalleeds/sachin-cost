@@ -1,4 +1,4 @@
-# CutCost — Sachin Industries
+# Cost by Ayush
 
 A laser-cutting calculator and practical 2D CAD workspace, built as an installable React/Vite website for Vercel or Netlify. Drawings are processed locally in a browser worker. Optional Supabase sign-in shares costing and quotation history across factory devices without maintaining an application server.
 

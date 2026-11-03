@@ -1,4 +1,4 @@
-# Publish Sachin CutCost with GitHub and Vercel
+# Publish Cost by Ayush with GitHub and Vercel
 
 The project already contains its Vercel build configuration. This guide uses GitHub Desktop so publishing and future updates do not require terminal commands. These instructions do not mean that a GitHub repository or live Vercel project has already been created.
 

@@ -4,7 +4,7 @@ import { validateSpline } from './spline.js';
 import { validateRecord } from './communications.js';
 
 export function validateBackup(data){
-  if(data?.app!=='sachin-cutcost'||data.version!==1||!data.workspace||!data.settings?.materials)throw new Error('This is not a supported CutCost backup.');
+  if(data?.app!=='sachin-cutcost'||data.version!==1||!data.workspace||!data.settings?.materials)throw new Error('This is not a supported Cost by Ayush backup.');
   const s=data.settings;
   if(typeof s.company!=='string'||!s.company.trim()||!['mm','m'].includes(s.rateUnit))throw new Error('Invalid company or pricing settings.');
   for(const key of Object.keys(DEFAULT_SETTINGS.materials)){

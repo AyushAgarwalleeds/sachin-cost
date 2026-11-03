@@ -6,7 +6,7 @@ export const DEFAULT_SETTINGS = {
     ALUM: { name:'Aluminium', rate:25, density:2700 }
   },
   rateUnit: 'mm', pierceThreshold:16, pierceLow:1, pierceHigh:2,
-  tolerance:0.01, company:'Sachin Industries', address:'', phone:'', email:'', gstin:'',
+  tolerance:0.01, company:'Cost by Ayush', address:'', phone:'', email:'', gstin:'',
   terms:'Rates are based on the approved drawing and quantities. Material availability and delivery to be confirmed.',
   validity:15, defaultThickness:10
 };
