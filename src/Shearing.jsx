@@ -2,7 +2,7 @@ import React,{useEffect,useRef,useState} from 'react';
 import {jsPDF} from 'jspdf';
 import autoTable from 'jspdf-autotable';
 import {money,num,roundMoney} from './costing.js';
-import {nestSheet,sheetRemnants,sheetWeight,validPlacement} from './shearing.js';
+import {nestSheet,sheetRemnants,sheetWeight,snapPlacement,validPlacement} from './shearing.js';
 import {downloadBlob,getSaved,updateSaved} from './storage.js';
 import {csvCell} from './csv.js';
 import './workshop.css';
@@ -28,6 +28,7 @@ export default function Shearing({settings}){
   const [rows,setRows]=useState(()=>[newRow('Part A'),newRow('Part B',600,500),newRow('Part C',800,400)]);
   const [material,setMaterial]=useState('MS'),[thickness,setThickness]=useState(settings.defaultThickness);
   const [rate,setRate]=useState(5),[materialRate,setMaterialRate]=useState(0),[rotate,setRotate]=useState(true);
+  const [withMaterial,setWithMaterial]=useState(false);
   const [client,setClient]=useState(''),[reference,setReference]=useState('');
   const [layout,setLayout]=useState(null),[selected,setSelected]=useState(null),[message,setMessage]=useState('');
   const [inventory,setInventory]=useState([]),[saving,setSaving]=useState(false);
@@ -37,9 +38,12 @@ export default function Shearing({settings}){
   useEffect(()=>{getSaved(remnantKey).then(items=>setInventory(items||[])).catch(error=>setMessage(error.message));},[]);
   const density=settings.materials[material].density;
   const remnants=layout?sheetRemnants(sheet,layout.parts):[];
-  const validCost=Number.isFinite(thickness)&&thickness>0&&Number.isFinite(rate)&&rate>=0&&Number.isFinite(materialRate)&&materialRate>=0;
+  const validCost=Number.isFinite(thickness)&&thickness>0&&Number.isFinite(rate)&&rate>=0&&
+    (!withMaterial||Number.isFinite(materialRate)&&materialRate>0);
   const weight=rect=>sheetWeight(rect,thickness,density);
-  const cost=rect=>roundMoney(weight(rect)*rate)+roundMoney(weight(rect)*materialRate);
+  const serviceCost=rect=>roundMoney(weight(rect)*rate);
+  const metalCost=rect=>withMaterial?roundMoney(weight(rect)*materialRate):0;
+  const cost=rect=>serviceCost(rect)+metalCost(rect);
   const placedCost=layout?.parts.reduce((sum,part)=>sum+cost(part),0);
   const chosen=layout?.parts.find(part=>part.id===selected);
   const labelSize=Math.min(sheet.width/47,sheet.height/23);
@@ -59,10 +63,12 @@ export default function Shearing({settings}){
     const inverse=svg.current.getScreenCTM()?.inverse();
     return inverse?new DOMPoint(event.clientX,event.clientY).matrixTransform(inverse):null;
   }
-  function dragPosition(event){
+  function dragPosition(event,settle=false){
     const start=drag.current,point=world(event);
-    if(!start||!point)return null;
-    return {...start.part,x:Math.round(start.part.x+point.x-start.point.x),y:Math.round(start.part.y+point.y-start.point.y)};
+    if(!start||!point||Math.hypot(event.clientX-start.screenX,event.clientY-start.screenY)<3)return null;
+    const next={...start.part,x:start.part.x+point.x-start.point.x,y:start.part.y+point.y-start.point.y};
+    const tolerance=10/svg.current.getScreenCTM().a;
+    return snapPlacement(next,sheet,layout.parts,tolerance,settle)??(settle?null:next);
   }
   async function saveRemnants(){
     if(saveLock.current||!remnants.length||!validCost||layout.unplaced.length)return;
@@ -95,7 +101,7 @@ export default function Shearing({settings}){
     doc.setFontSize(10);
     const details=[client&&'Client  '+clean(client),reference&&'Reference  '+clean(reference),
       `${material} / ${num(thickness)} mm / Mother sheet ${num(sheet.width)} x ${num(sheet.height)} mm`,
-      `Shearing rate  Rs. ${num(rate)}/kg${materialRate?' / Material  Rs. '+num(materialRate)+'/kg':''}`].filter(Boolean);
+      `Shearing rate  Rs. ${num(rate)}/kg${withMaterial?' / Material  Rs. '+num(materialRate)+'/kg':''}`].filter(Boolean);
     const lines=details.flatMap(line=>doc.splitTextToSize(line,178));
     doc.text(lines,16,46);
     autoTable(doc,{startY:51+lines.length*4,margin:{left:16,right:16},head:[['Piece','Size (mm)','Weight (kg)','Amount (INR)']],
@@ -113,8 +119,9 @@ export default function Shearing({settings}){
       <label>Mother sheet height (mm)<input type="number" value={sheet.height} onChange={e=>{setSheet({...sheet,height:inputNumber(e)});invalidate();}}/></label>
       <label>Material<select value={material} onChange={e=>setMaterial(e.target.value)}>{Object.entries(settings.materials).map(([id,item])=><option key={id} value={id}>{item.name}</option>)}</select></label>
       <label>Thickness (mm)<input type="number" value={thickness} onChange={e=>setThickness(inputNumber(e))}/></label>
-      <label>Shearing rate (₹/kg)<input type="number" value={rate} onChange={e=>setRate(inputNumber(e))}/></label>
-      <label>Optional material rate (₹/kg)<input type="number" value={materialRate} onChange={e=>setMaterialRate(inputNumber(e))}/></label>
+      <label>Shearing service rate (₹/kg)<input type="number" min="0" step="any" value={rate} onChange={e=>setRate(inputNumber(e))}/></label>
+      <label><input type="checkbox" checked={withMaterial} onChange={e=>setWithMaterial(e.target.checked)}/> With material</label>
+      {withMaterial&&<label>Material purchase rate (₹/kg)<input type="number" min="0" step="any" value={materialRate} onChange={e=>setMaterialRate(inputNumber(e))}/></label>}
     </div>
     <section className="business-card">
       <h2>Parts to cut</h2>
@@ -137,14 +144,14 @@ export default function Shearing({settings}){
     {message&&<p role="status">{message}</p>}
     {layout&&<section className="business-card">
       <h2>Sheet layout</h2>
-      <p>Drag a part to move it, or enter exact X and Y positions. Dashed rectangles show remnants. Check the cut sequence after manual moves.</p>
+      <p>Drag parts to snap to nearby edges. Drop over another part to move to the nearest open corner. Dashed rectangles show remnants.</p>
       <p className="shear-scroll-hint">Swipe across the preview to see the whole sheet.</p>
       <div className="shear-viewport" tabIndex={0} aria-label="Scrollable sheet preview">
       <svg className="shear-preview" ref={svg} viewBox={`0 ${-labelSize*2} ${sheet.width} ${sheet.height+labelSize*2}`} aria-label="Mother sheet layout"
         onPointerCancel={()=>{drag.current=null;setDragPreview(null);}}
         onPointerMove={event=>{if(drag.current)setDragPreview(dragPosition(event));}}
         onPointerUp={event=>{
-          const next=dragPosition(event),start=drag.current;
+          const next=dragPosition(event,true),start=drag.current;
           drag.current=null;setDragPreview(null);
           if(!next||next.x===start.part.x&&next.y===start.part.y)return;
           move(start.part,{x:next.x,y:next.y});
@@ -159,7 +166,7 @@ export default function Shearing({settings}){
         {layout.parts.map(part=><g key={part.id} className={part.id===selected?'shear-part selected':'shear-part'} onPointerDown={event=>{
           const point=world(event);
           if(!point)return;
-          select(part);drag.current={part,point};svg.current.setPointerCapture(event.pointerId);
+          select(part);drag.current={part,point,screenX:event.clientX,screenY:event.clientY};svg.current.setPointerCapture(event.pointerId);
         }}>
           <rect x={part.x} y={part.y} width={part.width} height={part.height} vectorEffect="non-scaling-stroke"/>
           <LayoutLabel rect={part} name={part.name} maxSize={labelSize}/>
@@ -181,9 +188,11 @@ export default function Shearing({settings}){
         <span>Placed pieces<b>{layout.parts.length}</b></span>
         <span>Sheet used<b>{num(100*(1-remnants.reduce((sum,rect)=>sum+rect.width*rect.height,0)/(sheet.width*sheet.height)),1)}%</b></span>
         {validCost&&<><span>Placed weight<b>{num(layout.parts.reduce((sum,part)=>sum+weight(part),0),3)} kg</b></span>
+          <span>Shearing service<b>{money(layout.parts.reduce((sum,part)=>sum+serviceCost(part),0))}</b></span>
+          {withMaterial&&<span>Material cost<b>{money(layout.parts.reduce((sum,part)=>sum+metalCost(part),0))}</b></span>}
           <span>Placed parts total<b>{money(placedCost)}</b></span></>}
       </div>
-      {!validCost&&<p role="alert">Enter positive thickness and nonnegative rates to price the parts.</p>}
+      {!validCost&&<p role="alert">Enter a positive thickness, a nonnegative service rate, and a positive material rate if supplying metal.</p>}
       {layout.unplaced.length>0&&<p role="alert">Unplaced pieces ({layout.unplaced.length}). {layout.unplaced.map(part=>part.name+' '+dimensions(part)).join(', ')}</p>}
       <div className="business-table"><table>
         <thead><tr><th>Placed piece</th><th>Size</th><th>X / Y (mm)</th><th>Weight</th><th>Total</th></tr></thead>

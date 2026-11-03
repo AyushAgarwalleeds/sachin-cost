@@ -8,7 +8,20 @@ import {curveLength,exportDxf,parseDxf} from '../src/geometry.js';
 import {prepareDrawing} from '../src/job-detection.js';
 import {manualPartJob,measureManualPart} from '../src/manual-costing.js';
 import {DEFAULT_SETTINGS} from '../src/costing.js';
-import {nestSheet,sheetRemnants,sheetWeight,validPlacement} from '../src/shearing.js';
+import {nestSheet,sheetRemnants,sheetWeight,snapPlacement,validPlacement} from '../src/shearing.js';
+
+test('manual shearing placement snaps to the sheet and adjacent parts, then settles overlapping drops',()=>{
+  const sheet={width:400,height:300};
+  const fixed={id:'fixed',x:100,y:100,width:100,height:100};
+  const piece={id:'moving',x:357,y:257,width:40,height:40};
+  assert.deepEqual(snapPlacement(piece,sheet,[fixed],5),{...piece,x:360,y:260});
+  assert.deepEqual(snapPlacement({...piece,x:198,y:104},sheet,[fixed],5),{...piece,x:200,y:100});
+  const overlapping={...piece,x:145,y:170};
+  assert.equal(snapPlacement(overlapping,sheet,[fixed],5),null);
+  const dropped=snapPlacement(overlapping,sheet,[fixed],5,true);
+  assert.deepEqual(dropped,{...piece,x:160,y:200});
+  assert.ok(validPlacement(dropped,sheet,[fixed]));
+});
 
 test('unpositioned cutouts update metre pricing, pierces and net weight',()=>{
   const row={name:'Plate',shape:'rectangle',width:100,height:60,radius:0,holes:[],material:'MS',thickness:10,quantity:2,kgRate:0,

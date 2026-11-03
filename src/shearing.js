@@ -11,6 +11,39 @@ export function validPlacement(part,sheet,placed){
       part.y<bottom(other)&&bottom(part)>other.y);
 }
 
+export function snapPlacement(part,sheet,placed,tolerance,settle=false){
+  const others=placed.filter(rect=>rect.id!==part.id);
+  const maxX=sheet.width-part.width,maxY=sheet.height-part.height;
+  const fits=validPlacement(part,sheet,others);
+  const axis=(target,max,size,edges,limit)=>{
+    const positions=[0,max,...edges.flatMap(edge=>[edge,edge-size])];
+    return [...new Set(positions)].filter(value=>value>=0&&value<=max&&Math.abs(value-target)<=limit)
+      .sort((a,b)=>Math.abs(a-target)-Math.abs(b-target)||a-b);
+  };
+  const xEdges=others.flatMap(rect=>[rect.x,right(rect)]),yEdges=others.flatMap(rect=>[rect.y,bottom(rect)]);
+  const xs=axis(part.x,maxX,part.width,xEdges,tolerance),ys=axis(part.y,maxY,part.height,yEdges,tolerance);
+  function nearest(xValues,yValues){
+    let best=null,distance=Infinity;
+    for(const x of xValues){
+      const dx=(x-part.x)**2;
+      if(dx>distance)break;
+      for(const y of yValues){
+        const squared=dx+(y-part.y)**2;
+        if(squared>=distance)break;
+        const next={...part,x,y};
+        if(validPlacement(next,sheet,others)){best=next;distance=squared;break;}
+      }
+    }
+    return best;
+  }
+  const corner=nearest(xs,ys);
+  if(corner)return corner;
+  const horizontal=nearest(xs,[part.y]),vertical=nearest([part.x],ys);
+  if(horizontal&&vertical)return Math.abs(horizontal.x-part.x)<=Math.abs(vertical.y-part.y)?horizontal:vertical;
+  if(horizontal||vertical||fits)return horizontal||vertical||part;
+  return settle?nearest(axis(part.x,maxX,part.width,xEdges,Infinity),axis(part.y,maxY,part.height,yEdges,Infinity)):null;
+}
+
 function splitFree(free,part){
   const x=Math.max(free.x,part.x),y=Math.max(free.y,part.y);
   const r=Math.min(right(free),right(part)),b=Math.min(bottom(free),bottom(part));
