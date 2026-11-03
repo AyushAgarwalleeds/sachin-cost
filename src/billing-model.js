@@ -66,6 +66,19 @@ export function billBalance(firm,bill){
   return bill.amounts.total-firm.payments.filter(p=>p.billId===bill.id).reduce((n,p)=>n+p.amount,0);
 }
 
+export function billRegister(firm,date=today()){
+  const paidByBill=new Map();
+  for(const entry of firm.payments){
+    paidByBill.set(entry.billId,(paidByBill.get(entry.billId)||0)+entry.amount);
+  }
+  return firm.bills.map(bill=>{
+    const paid=paidByBill.get(bill.id)||0;
+    const balance=bill.voided?0:bill.amounts.total-paid;
+    const status=bill.voided?'Void':balance===0?'Paid':bill.due&&bill.due<date?'Overdue':'Open';
+    return {bill,paid,balance,status};
+  });
+}
+
 export function recordPayment(firm,{billId,date,amount,reference}){
   const bill=firm.bills.find(b=>b.id===billId);
   const cents=paise(Number(amount));

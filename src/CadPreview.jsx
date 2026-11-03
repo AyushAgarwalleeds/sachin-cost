@@ -13,6 +13,10 @@ export default function CadPreview({jobs,files=EMPTY,ignored=EMPTY,annotations=E
  const editable=!compact&&!!onDeleteElements;
  useEffect(()=>{if(compact)return;const canvas=svg.current,zoom=e=>{e.preventDefault();if(!drag.current)setCamera(c=>({...c,z:Math.max(.15,Math.min(40,c.z*(e.deltaY>0?.88:1.12)))}));};canvas.addEventListener('wheel',zoom,{passive:false});return()=>canvas.removeEventListener('wheel',zoom);},[compact]);
  const [includeIgnored,setIncludeIgnored]=useState(false);
+ const selectedFileId=jobs.find(job=>job.id===selected)?.fileId;
+ useEffect(()=>{
+  if(selectedFileId&&files.length>1)setDrawingId(selectedFileId);
+ },[selectedFileId,files.length]);
  const ignoredIds=useMemo(()=>new Set(ignored.map(c=>c.id)),[ignored]);
  const filtered=useMemo(()=>jobs.filter(j=>(!drawingId||j.fileId===drawingId||j.sourceFileIds?.includes(drawingId))&&(!partView||!selected||j.id===selected)),[jobs,drawingId,partView,selected]);
  const sources=useMemo(()=>files.length?files.filter(f=>!drawingId||f.id===drawingId).flatMap(f=>f.result.curves):jobs.flatMap(j=>j.curves),[files,jobs,drawingId]);

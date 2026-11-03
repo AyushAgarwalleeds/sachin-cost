@@ -20,6 +20,7 @@ import {createRecord,prepareQuotationRecord,saveRecord,flushRecords,localRecords
 import {tagResult,migrateWorkspace,preserveJobInputs,mergeProjectHistory} from './workspace.js';
 import CadPreview from './CadPreview.jsx';
 import {assignManualJob} from './manual-jobs.js';
+import {csvCell} from './csv.js';
 import './styles.css';
 
 const EMPTY = () => ({id:crypto.randomUUID(),name:'Untitled estimate',customer:'',files:[],jobs:[],isDemo:false,unitsConfirmed:false,options:{withMaterial:false,setup:0,discount:0,tax:0},updatedAt:Date.now()});
@@ -84,8 +85,11 @@ export default function App(){
   async function reprocess(file,patch){
     setBusy(true);try{
       const changed={...file,...patch},result=tagResult(await parse(file.raw,file.format,{unit:changed.unitOverride,ignoredLayers:changed.ignoredLayers}),file.id);
-      result.jobs=result.jobs.map(j=>({...j,fileId:file.id,thickness:settings.defaultThickness}));
-      update(w=>({...w,files:w.files.map(f=>f.id===file.id?{...changed,result}:f),jobs:[...w.jobs.filter(j=>j.fileId!==file.id&&!j.sourceFileIds?.includes(file.id)),...result.jobs],unitsConfirmed:false}));setSelected(null);setChecked([]);notify('Drawing reprocessed. Job inputs were reset; review the extracted jobs.');
+      const sameUnits=result.unit===file.result.unit;
+      const previous=sameUnits?workspace.jobs.filter(job=>job.fileId===file.id&&!job.sourceFileIds?.some(id=>id!==file.id)):[];
+      result.jobs=preserveJobInputs(result.jobs,previous,settings.defaultThickness).map(job=>({...job,fileId:file.id}));
+      update(w=>({...w,files:w.files.map(f=>f.id===file.id?{...changed,result}:f),jobs:[...w.jobs.filter(j=>j.fileId!==file.id&&!j.sourceFileIds?.includes(file.id)),...result.jobs],unitsConfirmed:sameUnits&&w.unitsConfirmed}));setSelected(null);setChecked([]);
+      notify(sameUnits?'Layers updated. Matching jobs kept their costing inputs.':'Units changed. Confirm the new dimensions and review the jobs.');
     }catch(e){notify(e.message,'error');}finally{setBusy(false);}
   }
   async function refreshWorkspace(original,rateSettings=settings){
@@ -133,6 +137,40 @@ export default function App(){
       setElementUndo([]);setWorkspace(w);setQuote(freshQuote());setSelected(null);setChecked([]);setView('estimate');notify('Drawing sent to costing in millimetres. Review the extracted jobs.');
     }catch(e){notify(e.message,'error');}finally{setBusy(false);}
   }
+  async function createManualEstimate(parts,withMaterial){
+    if(busy||!parts.length)return;
+    setBusy(true);
+    try{
+      const next=EMPTY();
+      next.name=parts.length===1?(parts[0].name.trim()||'Manual estimate'):'Manual estimate';
+      next.options.withMaterial=withMaterial;
+      next.unitsConfirmed=true;
+      for(const [index,part] of parts.entries()){
+        const name=part.name.trim()||'Part '+(index+1);
+        const id=crypto.randomUUID();
+        const raw=exportDxf(part);
+        const parsed=await parse(part.curves.map(curve=>({...curve,cutIntent:'cut'})),'curves');
+        const [job]=parsed.jobs;
+        if(parsed.errors.length||parsed.jobs.length!==1||job.piercings!==part.piercings||job.area===null||
+          Math.abs(job.length-part.length)>1e-6*Math.max(1,part.length)||
+          Math.abs(job.area-part.area)>1e-6*Math.max(1,part.area))
+          throw new Error(name+' could not be transferred with the same cutting measurements.');
+        const result=tagResult({...parsed,jobs:[{...job,name,material:part.material,quantity:part.quantity,thickness:part.thickness,kgRate:part.kgRate}]},id);
+        next.files.push({id,name:name+'.dxf',format:'dxf',raw,result,ignoredLayers:[],edited:true});
+        next.jobs.push(result.jobs[0]);
+      }
+      archiveCurrent(false);
+      setWorkspace(next);
+      setQuote(freshQuote());
+      setSelected(next.jobs[0].id);
+      setChecked([]);
+      setSearch('');
+      setElementUndo([]);
+      setView('estimate');
+      notify('Manual parts added. Review the jobs to prepare a quotation.');
+    }catch(error){notify(error.message,'error');}
+    finally{setBusy(false);}
+  }
   async function finishQuotation(download=true){
     if(!quote.customer.trim())return notify('Enter a customer name for the quotation.','error');
     if(!ready)return setModal('review');
@@ -157,10 +195,10 @@ export default function App(){
     const jobs=workspace.jobs.filter(j=>j.included&&(!checked.length||checked.includes(j.id)));
     if(!jobs.length)return notify('Select at least one included job.','error');
     const zip=new JSZip(),names=exportFilenames(jobs);jobs.forEach((j,i)=>zip.file(names[i],exportDxf(j)));
-    zip.file('job-list.csv','Filename,Job,Thickness mm,Material,Quantity,Cut length mm per piece,Piercings per piece\n'+jobs.map((j,i)=>[names[i],j.name,j.thickness,j.material,j.quantity,j.length,j.piercings].map(v=>'"'+String(v).replaceAll('"','""')+'"').join(',')).join('\n'));
+    zip.file('job-list.csv','Filename,Job,Thickness mm,Material,Quantity,Cut length mm per piece,Piercings per piece\n'+jobs.map((j,i)=>[names[i],j.name,j.thickness,j.material,j.quantity,j.length,j.piercings].map(csvCell).join(',')).join('\n'));
     downloadBlob(await zip.generateAsync({type:'blob'}),`${workspace.name.replace(/[^a-zA-Z0-9 -]/g,'').slice(0,70)||'cutting-jobs'}-jobs.zip`);notify(`${jobs.length} individual DXF files exported in a ZIP.`);
   }
-  function csv(){const t=estimate(workspace.jobs,settings,workspace.options);downloadBlob(new Blob(['Job,Material,Thickness mm,Quantity,Cut mm per piece,Piercings per piece,Weight kg per piece,Unit INR,Total INR\n'+t.rows.map(r=>[r.job.name,r.job.material,r.job.thickness,r.job.quantity,r.length,r.piercings,r.weight??'',r.unit,r.total].map(v=>'"'+String(v).replaceAll('"','""')+'"').join(',')).join('\n')],{type:'text/csv'}),'sachin-cost-breakdown.csv');}
+  function csv(){const t=estimate(workspace.jobs,settings,workspace.options);downloadBlob(new Blob(['Job,Material,Thickness mm,Quantity,Cut mm per piece,Piercings per piece,Weight kg per piece,Unit INR,Total INR\n'+t.rows.map(r=>[r.job.name,r.job.material,r.job.thickness,r.job.quantity,r.length,r.piercings,r.weight??'',r.unit,r.total].map(csvCell).join(',')).join('\n')],{type:'text/csv'}),'sachin-cost-breakdown.csv');}
   async function installApp(){if(install){await install.prompt();setInstall(null);}else setModal('install');}
   if(!workspace)return <div className="loading"><Zap/><p>Opening your cutting workspace…</p></div>;
   const totals=estimate(workspace.jobs,settings,workspace.options),included=workspace.jobs.filter(j=>j.included);
@@ -190,7 +228,7 @@ export default function App(){
       </nav>
       <div className="sidebar-bottom"><div className="local-note"><ShieldCheck size={19}/><b>Your drawings stay yours.</b><p>Files are processed and saved on this device.</p><span><i/>{online?'Local-first workspace':'Working offline'}</span></div>
         <button className="sidebar-help" onClick={()=>setModal('help')}><HelpCircle size={17}/>Quick guide<ArrowUpRight size={15}/></button>
-        <div className="profile"><span>SI</span><div><b>Factory workspace</b><small>Factory use · v2.4</small></div><button className="icon-btn" title="Install app" onClick={installApp}><Download size={17}/></button></div>
+        <div className="profile"><span>SI</span><div><b>Factory workspace</b><small>Factory use · v2.5</small></div><button className="icon-btn" title="Install app" onClick={installApp}><Download size={17}/></button></div>
       </div>
     </aside>
     <div className="main-shell">
@@ -253,7 +291,7 @@ export default function App(){
         </>}
         {view==='history'&&<><div className="page-heading"><div><div className="eyebrow">PICK UP WHERE YOU LEFT OFF</div><h1>Saved projects<span className="heading-dot">.</span></h1><p>Stored on this device. Back up your projects to move them to another.</p></div><button className="button secondary" onClick={portableBackup}><Download size={16}/>Back up all</button></div><div className="history-grid">{saved.map(p=><article className="card history-card" key={p.id}><div className="history-preview"><CadPreview jobs={p.jobs} compact/></div><h2>{p.name}</h2><p>{p.jobs.length} jobs · {new Date(p.updatedAt).toLocaleDateString('en-IN')}</p><div><button className="button primary small" onClick={()=>openProject(p)}>Open project<ArrowUpRight size={14}/></button><button className="icon-btn" title="Remove from saved history" onClick={()=>{setSaved(a=>a.filter(x=>x.id!==p.id));notify('Removed from saved history.');}}><Trash2 size={16}/></button></div></article>)}</div>{!saved.length&&<div className="card empty-history"><FolderClock size={38}/><h2>Your next estimate starts here.</h2><p>Save the current project or create a new estimate. Previous estimates appear here.</p><button className="button primary" onClick={()=>setView('estimate')}>Go to calculator</button></div>}</>}
         {view==='cad'&&<CadStudio key={cadKey} source={cadSource} onApply={useCad} onCancel={()=>setView('estimate')} notify={notify} parseDrawing={async f=>{if(f.size>30*1024*1024)throw new Error('Drawing exceeds 30 MB.');const ext=f.name.split('.').pop().toLowerCase();if(!['dxf','dwg'].includes(ext))throw new Error('Choose a DXF or DWG.');return parse(ext==='dwg'?await f.arrayBuffer():await f.text(),ext);}}/>}
-        {view==='manual'&&<ManualCosting settings={settings}/>}
+        {view==='manual'&&<ManualCosting settings={settings} busy={busy} onEstimate={createManualEstimate}/>}
         {view==='billing'&&<BillingCentre settings={settings}/>}
         {view==='communications'&&<CommunicationCenter notify={notify} onShare={record=>{setShareRecord(record);setModal('share');}}/>}
         {view==='settings'&&<Settings settings={settings} setSettings={setSettings} notify={notify} onBackup={portableBackup} onRestore={()=>backupInput.current.click()}/>}
@@ -265,7 +303,7 @@ export default function App(){
       {modal==='review'&&<div className="review-content"><div className="notice info"><ShieldCheck size={20}/><p>Check that each outer outline is a part, inner outlines are holes, and piercing counts match your cutting process. Open cuts need one start per connected contour.</p></div>{importErrors.map((e,i)=><div className="notice danger" key={i}><AlertTriangle size={17}/><p>{e}</p></div>)}{validation.map((e,i)=><div className="notice warning" key={i}><Info size={17}/><p>{e}</p></div>)}{issues.length>0&&<details className="review-details"><summary>Import notes ({issues.length})</summary>{issues.map((i,n)=><p key={n}>{i}</p>)}</details>}<label className="review-unit"><input type="checkbox" checked={workspace.unitsConfirmed} onChange={e=>update(w=>({...w,unitsConfirmed:e.target.checked}))}/><span><b>I have checked the drawing units and dimensions.</b><small>Current units: {workspace.files.map(f=>`${f.name}: ${f.result.unit}`).join(' · ')||'no drawings'}</small></span><button className="plain-button" onClick={()=>setModal('drawing')}>Change</button></label>
         {included.map(j=><div className="review-row" key={j.id}><div className="part-thumbnail"><MiniShape job={j}/></div><div><b>{j.name}</b><small>{num(j.bounds.width,1)} × {num(j.bounds.height,1)} mm · {num(j.length)} mm cut · {j.piercingsOverride??j.piercings} starts{j.open?' · OPEN CUT':''}</small></div><button className="plain-button" onClick={()=>{setSelected(j.id);setModal('job');}}>Inspect</button><input type="checkbox" aria-label={`Reviewed ${j.name}`} checked={j.reviewed} onChange={e=>updateJob(j.id,{reviewed:e.target.checked})}/></div>)}
         <div className="modal-actions"><button className="button secondary" onClick={()=>update(w=>({...w,jobs:w.jobs.map(j=>j.included?{...j,reviewed:true}:j)}))} disabled={!included.length}>Mark included jobs reviewed</button><button className="button primary" disabled={!ready} onClick={()=>{setQuote(q=>({...q,customer:q.customer||workspace.customer}));setModal('quotation');}}>Continue to quotation<ArrowUpRight size={16}/></button></div>{importErrors.length>0&&<p className="field-hint">Drawing errors must be fixed in CAD, or their non-cutting layers explicitly excluded. Review checkboxes cannot bypass an incomplete import.</p>}</div>}
-      {modal==='drawing'&&<><p className="modal-intro">Check a known dimension. Changing units or excluded layers re-extracts the file and resets its job inputs.</p>{workspace.files.map(f=><div className="file-settings" key={f.id}><b><FileText size={16}/>{f.name}</b>{f.edited&&<div className="notice info"><Info size={16}/><p>This drawing was edited. Use Open CAD editor to change its cutting layers or scale; re-import the original to reinterpret source units.</p></div>}<Field label={`Drawing unit (${f.result.detectedUnit?'detected '+f.result.detectedUnit:'not specified in file'})`}><select value={f.unitOverride||f.result.unit} disabled={busy||f.edited} onChange={e=>reprocess(f,{unitOverride:e.target.value})}>{['mm','cm','m','in','ft'].map(u=><option key={u}>{u}</option>)}</select></Field><details><summary>Cutting layers · {f.result.layers.length} available</summary><p className="field-hint">Uncheck construction, sheet borders or other non-cutting layers.</p>{f.result.layers.map(l=><label className="check-label" key={l}><input type="checkbox" checked={!(f.ignoredLayers||[]).includes(l)} disabled={busy||f.edited} onChange={e=>reprocess(f,{ignoredLayers:e.target.checked?(f.ignoredLayers||[]).filter(x=>x!==l):[...(f.ignoredLayers||[]),l]})}/>{l}</label>)}</details><button className="plain-button error-text" onClick={()=>{update(w=>({...w,files:w.files.filter(x=>x.id!==f.id),jobs:w.jobs.filter(j=>j.fileId!==f.id&&!j.sourceFileIds?.includes(f.id))}));}}>Remove drawing</button></div>)}{!workspace.files.length&&<p>No drawing imported yet.</p>}<div className="modal-actions"><label className="check-label"><input type="checkbox" checked={workspace.unitsConfirmed} onChange={e=>update(w=>({...w,unitsConfirmed:e.target.checked}))}/>I checked the units and dimensions</label><button className="button primary" onClick={()=>setModal(null)}>Done<Check size={16}/></button></div></>}
+      {modal==='drawing'&&<><p className="modal-intro">Check a known dimension. Changing units resets job inputs. Layer changes keep costing inputs for matching jobs.</p>{workspace.files.map(f=><div className="file-settings" key={f.id}><b><FileText size={16}/>{f.name}</b>{f.edited&&<div className="notice info"><Info size={16}/><p>This drawing was edited. Use Open CAD editor to change its cutting layers or scale; re-import the original to reinterpret source units.</p></div>}<Field label={`Drawing unit (${f.result.detectedUnit?'detected '+f.result.detectedUnit:'not specified in file'})`}><select value={f.unitOverride||f.result.unit} disabled={busy||f.edited} onChange={e=>reprocess(f,{unitOverride:e.target.value})}>{['mm','cm','m','in','ft'].map(u=><option key={u}>{u}</option>)}</select></Field><details><summary>Cutting layers · {f.result.layers.length} available</summary><p className="field-hint">Uncheck construction, sheet borders or other non-cutting layers.</p>{f.result.layers.map(l=><label className="check-label" key={l}><input type="checkbox" checked={!(f.ignoredLayers||[]).includes(l)} disabled={busy||f.edited} onChange={e=>reprocess(f,{ignoredLayers:e.target.checked?(f.ignoredLayers||[]).filter(x=>x!==l):[...(f.ignoredLayers||[]),l]})}/>{l}</label>)}</details><button className="plain-button error-text" onClick={()=>{update(w=>({...w,files:w.files.filter(x=>x.id!==f.id),jobs:w.jobs.filter(j=>j.fileId!==f.id&&!j.sourceFileIds?.includes(f.id))}));}}>Remove drawing</button></div>)}{!workspace.files.length&&<p>No drawing imported yet.</p>}<div className="modal-actions"><label className="check-label"><input type="checkbox" checked={workspace.unitsConfirmed} onChange={e=>update(w=>({...w,unitsConfirmed:e.target.checked}))}/>I checked the units and dimensions</label><button className="button primary" onClick={()=>setModal(null)}>Done<Check size={16}/></button></div></>}
       {modal==='batch'&&<><p className="modal-intro">Apply these values to {checked.length?`${checked.length} selected`:'all'} jobs. Geometry measurements stay with each job.</p><div className="form-grid"><Field label="Material"><select value={batch.material} onChange={e=>setBatch({...batch,material:e.target.value})}>{Object.keys(settings.materials).map(m=><option key={m}>{m}</option>)}</select></Field><Field label="Thickness (mm)"><input type="number" min="0.01" value={batch.thickness} onChange={e=>setBatch({...batch,thickness:inputNumber(e)})}/></Field><Field label="Quantity per job"><input type="number" min="1" step="1" value={batch.quantity} onChange={e=>setBatch({...batch,quantity:inputNumber(e)})}/></Field><Field label="Material price (₹/kg)"><input type="number" min="0" value={batch.kgRate} onChange={e=>setBatch({...batch,kgRate:inputNumber(e)})}/></Field></div><div className="modal-actions"><button className="button primary" onClick={()=>{if(batch.thickness<=0||!Number.isInteger(batch.quantity)||batch.quantity<1||batch.kgRate<0)return notify('Use positive thickness, a whole quantity, and a nonnegative material rate.','error');update(w=>({...w,jobs:w.jobs.map(j=>!checked.length||checked.includes(j.id)?{...j,...batch}:j)}));setModal(null);notify('Job inputs updated.');}}>Apply to {checked.length||workspace.jobs.length} jobs<Check size={16}/></button></div></>}
       {modal==='material'&&<><p className="modal-intro">Weight is per piece. Automatic weight = net CAD area × thickness × density. Override it for supplied weight, scrap allowance or open cuts.</p><div className="material-editor-list">{included.map(j=>{const c=costJob(j,settings,true);return <div key={j.id} className="material-editor-row"><div><b>{j.name}</b><small>{j.material} · {j.thickness} mm · {j.quantity} pcs</small></div><Field label="₹ / kg"><input type="number" min="0" value={j.kgRate} onChange={e=>updateJob(j.id,{kgRate:inputNumber(e)})}/></Field><Field label="Weight kg / piece"><input type="number" min="0" step="0.001" placeholder={c.weight===null?'Required':num(c.weight,3)} value={j.weightOverride??''} onChange={e=>updateJob(j.id,{weightOverride:e.target.value===''?null:inputNumber(e)})}/></Field><div className="right"><b>{money(c.material*j.quantity)}</b><small>{j.weightOverride===null?'CAD weight':'Manual weight'}</small></div></div>;})}</div><div className="modal-actions"><button className="button secondary" onClick={()=>setModal('batch')}>Set one rate for all jobs</button><button className="button primary" onClick={()=>setModal(null)}>Done<Check size={16}/></button></div></>}
       {modal==='quotation'&&<QuotationEditor workspace={workspace} settings={settings} quote={quote} setQuote={setQuote} onExport={()=>finishQuotation(true)} onShare={()=>finishQuotation(false)}/>}

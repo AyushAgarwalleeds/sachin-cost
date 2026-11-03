@@ -10,6 +10,10 @@
 .business-page button:hover,.billing-overlay button:hover{background:#dcebdd}
 .business-page button[aria-pressed=true],.business-page form>button:not([type=button]){background:#285c40;color:white}
 .business-page button:disabled{opacity:.5;cursor:default}
+.business-page button.business-primary{background:#285c40;color:white;border-color:#285c40}
+.business-page button.business-primary:hover:not(:disabled){background:#1f4932}
+.manual-preview{display:block;width:min(100%,420px);height:158px;margin:12px 0;border:1px solid #dbe6db;border-radius:8px;background:#f4faf4}
+.manual-preview path{fill:#cde8d3;stroke:#285c40;stroke-width:1.5}
 .business-page button+button{margin-left:4px}
 .business-page label{display:grid;gap:4px;font-size:12px;font-weight:600}
 .business-page label:has(input[type=checkbox]){display:flex;align-items:center;gap:6px}

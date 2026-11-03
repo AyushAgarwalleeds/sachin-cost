@@ -1,6 +1,6 @@
 import React,{useEffect,useMemo,useRef,useState,useId} from 'react';
 import {MousePointer2,Hand,Slash,RectangleHorizontal,Circle,Waypoints,Undo2,Redo2,Trash2,Download,Upload,ArrowUpRight,Move,Copy,RotateCw,FlipHorizontal,Scissors,Maximize,ZoomIn,ZoomOut,Magnet,Grid2X2,Ruler,Check,Plus,CornerDownRight,Save,Layers} from 'lucide-react';
-import {analyzeCurves,curvePoint,curveLength,sampleCurve,exportDxf,TAU,dist,buildContours} from './geometry.js';
+import {analyzeCurves,boundsOf,curvePoint,curveLength,sampleCurve,exportDxf,TAU,dist,buildContours} from './geometry.js';
 import {identify,drawingBounds,curveBounds,hitCurve,snapPoint,rectangleCurves,arcThrough,transformCurves,trimCurve,extendLine,offsetCurve,corner,healGaps,openPathIds} from './cad-model.js';
 import {downloadBlob,getSaved,putSaved} from './storage.js';
 import {num} from './costing.js';
@@ -35,11 +35,23 @@ export default function CadStudio({source,onApply,onCancel,notify,parseDrawing})
  const blocked=importErrors.filter(e=>!nonCut.some(l=>e.includes(`“${l}”`))),cutCurves=useMemo(()=>curves.filter(c=>!nonCut.includes(c.layer)&&c.cutIntent!=='ignore'),[curves,nonCut]);
  const contours=useMemo(()=>{try{return buildContours(curves,.01).contours;}catch{return [];}},[curves]);
  useEffect(()=>{const ro=new ResizeObserver(entries=>{const r=entries[0].contentRect;setSize({width:r.width,height:r.height});});if(container.current)ro.observe(container.current);return()=>ro.disconnect();},[]);
- function fit(){const b=drawingBounds(curves);setCamera({cx:(b.minX+b.maxX)/2,cy:(b.minY+b.maxY)/2,height:Math.max(50,b.height*1.25,b.width/aspect*1.25)});}
+ function fit(drawing=curves,marks=resolvedDimensions){
+  const b=drawingBounds(drawing);
+  const annotationPoints=marks.flatMap(dimension=>{
+   const mark=dimensionDrawing(dimension);
+   return [mark.at,...mark.lines.flat()];
+  });
+  const extents=boundsOf([{x:b.minX,y:b.minY},{x:b.maxX,y:b.maxY},...annotationPoints]);
+  setCamera({cx:(extents.minX+extents.maxX)/2,cy:(extents.minY+extents.maxY)/2,height:Math.max(50,extents.height*1.25,extents.width/aspect*1.25)});
+ }
  useEffect(()=>{if(!initial.current&&size.width){initial.current=true;if(source){if(curves.length)fit();return;}getSaved('cad-draft').then(d=>{
   if(d?.curves&&revision.current===0){
    setCurves(d.curves);setDimensions(d.dimensions||[]);setName(d.name);setNonCut(d.nonCut||[]);setImportErrors(d.importErrors||[]);
-   if(d.curves.length){setStatus('Your previous CAD draft was restored.');const b=drawingBounds(d.curves);setCamera({cx:(b.minX+b.maxX)/2,cy:(b.minY+b.maxY)/2,height:Math.max(50,b.height*1.3,b.width/aspect*1.3)});}
+   if(d.curves.length){
+    const index=new Map(d.curves.map(curve=>[curve.id,curve]));
+    fit(d.curves,(d.dimensions||[]).map(dimension=>resolveDimension(dimension,index)));
+    setStatus('Your previous CAD draft was restored.');
+   }
   }
   setDraftReady(true);
  }).catch(()=>setStatus('The CAD draft could not be loaded. Export DXF before leaving.'));}},[size.width]);
@@ -179,7 +191,7 @@ export default function CadStudio({source,onApply,onCancel,notify,parseDrawing})
       {cursor.kind&&tool!=='select'&&tool!=='pan'&&<rect x={cursor.point.x-worldPerPixel*4} y={-cursor.point.y-worldPerPixel*4} width={worldPerPixel*8} height={worldPerPixel*8} fill="none" stroke="#eff9a1" strokeWidth="1" vectorEffect="non-scaling-stroke"/>}
      </svg>
      {!curves.length&&<div className="studio-empty"><Ruler size={32}/><b>Your next laser part starts here.</b><span>Choose Line, Rectangle or Circle. Click on the canvas or type exact coordinates.</span></div>}
-     <div className="studio-view-controls"><button aria-label="CAD zoom out" onClick={()=>setCamera(c=>({...c,height:c.height*1.3}))}><ZoomOut size={17}/></button><button aria-label="CAD fit drawing" onClick={fit}><Maximize size={17}/></button><button aria-label="CAD zoom in" onClick={()=>setCamera(c=>({...c,height:Math.max(.05,c.height/1.3)}))}><ZoomIn size={17}/></button></div>
+     <div className="studio-view-controls"><button aria-label="CAD zoom out" onClick={()=>setCamera(c=>({...c,height:c.height*1.3}))}><ZoomOut size={17}/></button><button aria-label="CAD fit drawing" onClick={()=>fit()}><Maximize size={17}/></button><button aria-label="CAD zoom in" onClick={()=>setCamera(c=>({...c,height:Math.max(.05,c.height/1.3)}))}><ZoomIn size={17}/></button></div>
      <div className="studio-coordinate">X {num(cursor.point.x,3)} · Y {num(cursor.point.y,3)} mm {cursor.kind&&<b>{cursor.kind}</b>}</div>
     </div>
     <form className="studio-command" onSubmit={submitCommand}><span>›</span><input aria-label="CAD command coordinates" placeholder="LINE / CIRCLE / FIT · X,Y · @dx,dy · Enter finishes paths" value={command} onChange={e=>setCommand(e.target.value)}/><button type="submit">Enter<CornerDownRight size={13}/></button></form>

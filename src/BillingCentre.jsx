@@ -3,8 +3,9 @@ import {createPortal} from 'react-dom';
 import {money} from './costing.js';
 import {downloadBlob,getSaved} from './storage.js';
 import {loadBooks,saveBooks} from './billing-store.js';
-import {billBalance,blankItem,freshFirm,importContacts,invoiceAmounts,partyLedger,postBill,recordPayment,today,validateBooksBackup} from './billing-model.js';
+import {billBalance,billRegister,blankItem,freshFirm,importContacts,invoiceAmounts,partyLedger,postBill,recordPayment,today,validateBooksBackup} from './billing-model.js';
 import {measureManualPart} from './manual-costing.js';
+import {csvCell} from './csv.js';
 import BillingContacts from './BillingContacts.jsx';
 import BillingPrint from './BillingPrint.jsx';
 import './business.css';
@@ -76,11 +77,6 @@ function BillForm({firm,busy,save,run,settings}){
   </form>;
 }
 
-function csvCell(value){
-  const text=String(value??'');
-  return '"'+(/^[\s]*[=+\-@]/.test(text)&&typeof value!=='number'?"'":'')+text.replaceAll('"','""')+'"';
-}
-
 function Ledger({firm}){
   const [party,setParty]=useState(''),[from,setFrom]=useState(''),[to,setTo]=useState('');
   const ledger=partyLedger(firm,party);
@@ -108,6 +104,7 @@ export default function BillingCentre({settings}){
   const [source,setSource]=useState(false),[snapshot,setSnapshot]=useState(null),[firmId,setFirmId]=useState(''),[tab,setTab]=useState('Bills');
   const [busy,setBusy]=useState(false),[message,setMessage]=useState(''),[error,setError]=useState('');
   const [printing,setPrinting]=useState(null),[payment,setPayment]=useState(null),[filter,setFilter]=useState('');
+  const [billType,setBillType]=useState('all'),[billStatus,setBillStatus]=useState('all');
   const operation=useRef(false);
   const firms=snapshot?.books.firms||[],firm=firms.find(f=>f.id===firmId)||firms[0];
   async function run(action){
@@ -142,7 +139,15 @@ export default function BillingCentre({settings}){
       setFirmId(draft.id);setTab('Bills');setMessage('Firm saved.');
     });
   }
-  const bills=firm?.bills.filter(b=>[b.number,b.party.name,b.kind].join(' ').toLowerCase().includes(filter.toLowerCase())).slice().reverse()||[];
+  const currentDate=today();
+  const register=firm?billRegister(firm,currentDate):[];
+  const query=filter.trim().toLowerCase();
+  const bills=register.filter(({bill,status})=>
+    (billType==='all'||bill.kind===billType)&&
+    (billStatus==='all'||(billStatus==='outstanding'?['Open','Overdue'].includes(status):status===billStatus))&&
+    [bill.number,bill.party.name,bill.kind].join(' ').toLowerCase().includes(query)
+  ).reverse().sort((a,b)=>b.bill.date.localeCompare(a.bill.date));
+  const paymentRow=register.find(({bill})=>bill.id===payment?.billId);
   return <section className="business-page">
     <h1>Billing centre</h1><p>Sales, purchases, payments and party ledgers by firm.</p>
     <div className="business-bar">
@@ -200,14 +205,25 @@ export default function BillingCentre({settings}){
     {firm&&tab==='Ledger'&&<Ledger key={firm.id} firm={firm}/>}
     {firm&&tab==='Bills'&&<section className="business-card">
       <div className="business-metrics">
-        <span>Outstanding sales <b>{cash(firm.bills.filter(b=>b.kind==='sales').reduce((n,b)=>n+billBalance(firm,b),0))}</b></span>
-        <span>Outstanding purchases <b>{cash(firm.bills.filter(b=>b.kind==='purchase').reduce((n,b)=>n+billBalance(firm,b),0))}</b></span>
+        <span>Outstanding sales <b>{cash(register.filter(r=>r.bill.kind==='sales').reduce((n,r)=>n+r.balance,0))}</b></span>
+        <span>Outstanding purchases <b>{cash(register.filter(r=>r.bill.kind==='purchase').reduce((n,r)=>n+r.balance,0))}</b></span>
+        <span>Overdue sales <b>{cash(register.filter(r=>r.bill.kind==='sales'&&r.status==='Overdue').reduce((n,r)=>n+r.balance,0))}</b></span>
+        <span>Overdue purchases <b>{cash(register.filter(r=>r.bill.kind==='purchase'&&r.status==='Overdue').reduce((n,r)=>n+r.balance,0))}</b></span>
       </div>
-      <label>Search bills<input value={filter} onChange={e=>setFilter(e.target.value)} placeholder="Number, contact or type"/></label>
-      <div className="business-table"><table><thead><tr><th>Date</th><th>Number</th><th>Party</th><th>Type</th><th>Total</th><th>Outstanding</th><th>Actions</th></tr></thead>
-        <tbody>{bills.map(b=><tr key={b.id}><td>{b.date}</td><td>{b.number}</td><td>{b.party.name}</td><td>{b.kind}</td><td>{cash(b.amounts.total)}</td><td>{b.voided?'Void':cash(billBalance(firm,b))}</td>
-          <td><button onClick={()=>setPrinting(b.id)}>View / print</button>{billBalance(firm,b)>0&&<button disabled={busy} onClick={()=>setPayment({billId:b.id,date:today(),amount:'',reference:''})}>{b.kind==='sales'?'Receipt':'Payment'}</button>}
-            {!b.voided&&billBalance(firm,b)===b.amounts.total&&<button disabled={busy} onClick={()=>{if(window.confirm('Void '+b.number+' and post a reversing ledger entry?'))run(async()=>{
+      <div className="business-grid">
+        <label>Search bills<input value={filter} onChange={e=>setFilter(e.target.value)} placeholder="Number, contact or type"/></label>
+        <label>Bill type<select value={billType} onChange={e=>setBillType(e.target.value)}><option value="all">All types</option><option value="sales">Sales</option><option value="purchase">Purchases</option></select></label>
+        <label>Status<select value={billStatus} onChange={e=>setBillStatus(e.target.value)}><option value="all">All statuses</option><option value="outstanding">Outstanding</option><option>Overdue</option><option>Paid</option><option>Void</option></select></label>
+        <button disabled={!bills.length} onClick={()=>{
+          const rows=[['Date','Due date','Number','Party','Type','Status','Total INR','Paid INR','Outstanding INR'],
+            ...bills.map(({bill,paid,balance,status})=>[bill.date,bill.due,bill.number,bill.party.name,bill.kind,status,bill.amounts.total/100,paid/100,balance/100])];
+          downloadBlob(new Blob([rows.map(row=>row.map(csvCell).join(',')).join('\r\n')],{type:'text/csv'}),'bill-register.csv');
+        }}>Export visible bills</button>
+      </div>
+      <div className="business-table"><table><thead><tr><th>Date</th><th>Due</th><th>Number</th><th>Party</th><th>Type</th><th>Status</th><th>Total</th><th>Outstanding</th><th>Actions</th></tr></thead>
+        <tbody>{bills.map(({bill:b,balance,status})=><tr key={b.id}><td>{b.date}</td><td>{b.due||'—'}</td><td>{b.number}</td><td>{b.party.name}</td><td>{b.kind}</td><td className={status==='Overdue'?'business-error':undefined}>{status}</td><td>{cash(b.amounts.total)}</td><td>{cash(balance)}</td>
+          <td><button onClick={()=>setPrinting(b.id)}>View / print</button>{balance>0&&<button disabled={busy} onClick={()=>setPayment({billId:b.id,date:b.date>currentDate?b.date:currentDate,amount:'',reference:''})}>{b.kind==='sales'?'Receipt':'Payment'}</button>}
+            {!b.voided&&balance===b.amounts.total&&<button disabled={busy} onClick={()=>{if(window.confirm('Void '+b.number+' and post a reversing ledger entry?'))run(async()=>{
               await changeFirm(f=>({...f,bills:f.bills.map(old=>{
                 if(old.id!==b.id)return old;
                 if(old.voided||f.payments.some(p=>p.billId===old.id))throw new Error('Only unpaid active bills can be voided.');
@@ -218,12 +234,12 @@ export default function BillingCentre({settings}){
       {payment&&<form onSubmit={e=>{e.preventDefault();run(async()=>{
         await changeFirm(f=>({...f,payments:[...f.payments,recordPayment(f,payment)]}));
         setPayment(null);setMessage('Settlement posted to the party ledger.');
-      });}}><h3>Settle {firm.bills.find(b=>b.id===payment.billId)?.number}</h3>
+      });}}><h3>Settle {paymentRow?.bill.number}</h3>
         <div className="business-grid">
-          <label>Date<input required type="date" value={payment.date} onChange={e=>setPayment({...payment,date:e.target.value})}/></label>
-          <label>Amount (₹)<input required type="number" min=".01" step=".01" value={payment.amount} onChange={e=>setPayment({...payment,amount:numeric(e)})}/></label>
+          <label>Date<input required type="date" min={paymentRow?.bill.date} value={payment.date} onChange={e=>setPayment({...payment,date:e.target.value})}/></label>
+          <label>Amount (₹)<input required type="number" min=".01" max={paymentRow?.balance/100} step=".01" value={payment.amount} onChange={e=>setPayment({...payment,amount:numeric(e)})}/></label>
           <label>Reference<input value={payment.reference} onChange={e=>setPayment({...payment,reference:e.target.value})}/></label>
-        </div><button disabled={busy}>Record settlement</button><button type="button" onClick={()=>setPayment(null)}>Cancel</button>
+        </div><button disabled={busy}>Record settlement</button><button type="button" disabled={!paymentRow?.balance} onClick={()=>setPayment({...payment,amount:paymentRow.balance/100})}>Use full balance</button><button type="button" onClick={()=>setPayment(null)}>Cancel</button>
       </form>}
     </section>}
     {firm?.bills.some(b=>b.id===printing)&&createPortal(<BillingPrint bill={firm.bills.find(b=>b.id===printing)} balance={billBalance(firm,firm.bills.find(b=>b.id===printing))} close={()=>setPrinting(null)}/>,document.body)}

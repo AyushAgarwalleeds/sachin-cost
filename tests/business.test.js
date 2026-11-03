@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {billBalance,freshFirm,importContacts,parseContactCsv,partyLedger,postBill,recordPayment,validateBooksBackup} from '../src/billing-model.js';
+import {billBalance,billRegister,freshFirm,importContacts,parseContactCsv,partyLedger,postBill,recordPayment,validateBooksBackup} from '../src/billing-model.js';
 import {createDimension,dimensionDrawing,dimensionEntities,resolveDimension} from '../src/cad-dimensions.js';
 import {rectangleCurves} from '../src/cad-model.js';
 import {exportDxf,parseDxf} from '../src/geometry.js';
@@ -47,6 +47,22 @@ test('client CSV preserves quoted multiline addresses and updates matching parti
   assert.equal(contacts[0].phone,'001234');
 });
 
+test('register reports overdue balances after partial settlement and excludes void bills',()=>{
+  const books=firm();
+  const bill=postBill(books,{...draft,due:'2026-11-10'});
+  books.bills.push(bill);
+  books.payments.push(recordPayment(books,{billId:bill.id,date:draft.date,amount:200}));
+  assert.equal(billRegister(books,'2026-11-10')[0].status,'Open');
+  const [overdue]=billRegister(books,'2026-11-11');
+  assert.equal(overdue.status,'Overdue');
+  assert.equal(overdue.balance,98000);
+  books.payments.push(recordPayment(books,{billId:bill.id,date:'2026-11-11',amount:980}));
+  assert.equal(billRegister(books,'2026-11-11')[0].status,'Paid');
+  const cancelled=postBill(books,draft);
+  books.bills.push({...cancelled,voided:'2026-11-11'});
+  assert.deepEqual(billRegister(books,'2026-11-11').map(({status,balance})=>[status,balance]),[['Paid',0],['Void',0]]);
+});
+
 test('attached dimensions follow line endpoints and DXF annotations stay out of job measurements',()=>{
   const curves=rectangleCurves({x:0,y:0},{x:100,y:60});
   const d=createDimension('dimLinear',[{x:0,y:0},{x:100,y:0},{x:50,y:-15}],curves);
@@ -81,4 +97,15 @@ test('manual plate accounts for hole length, net weight, quantity and exact cost
   assert.equal(imported.jobs[0].piercings,2);
   assert.ok(Math.abs(imported.jobs[0].length-result.length)<1e-8);
   assert.throws(()=>measureManualPart({...row,holes:[{x:150,y:30,diameter:10}]},DEFAULT_SETTINGS,false),/inside/);
+});
+
+test('manual rings retain both cuts and net area when passed through drawing detection',()=>{
+  const row={shape:'ring',diameter:100,innerDiameter:60,material:'MS',thickness:10,quantity:2,kgRate:0,holes:[]};
+  const part=manualPartJob(row);
+  const result=prepareDrawing(parseDxf(exportDxf(part),{skipTopology:true}));
+  assert.equal(result.jobs.length,1);
+  assert.equal(result.jobs[0].piercings,2);
+  assert.ok(Math.abs(result.jobs[0].length-160*Math.PI)<1e-8);
+  assert.ok(Math.abs(result.jobs[0].area-1600*Math.PI)<1e-8);
+  assert.throws(()=>manualPartJob({...row,innerDiameter:100}),/smaller/);
 });
