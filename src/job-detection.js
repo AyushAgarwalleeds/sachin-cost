@@ -2,7 +2,7 @@ import {analyzeCurves,buildContours,boundsOf,sampleCurve,curvePoint,curveArea,cu
 import {nodeEndpointJunctions} from './junctions.js';
 import {makeManualJob} from './manual-jobs.js';
 
-export const ANALYSIS_VERSION=6;
+export const ANALYSIS_VERSION=7;
 const contains=(a,b,t=1e-5)=>a.minX<=b.minX+t&&a.maxX>=b.maxX-t&&a.minY<=b.minY+t&&a.maxY>=b.maxY-t;
 const box=cs=>boundsOf(cs.flatMap(c=>sampleCurve(c,.05)));
 const pad=(b,d)=>({...b,minX:b.minX-d,minY:b.minY-d,maxX:b.maxX+d,maxY:b.maxY+d});
@@ -101,7 +101,8 @@ export function prepareDrawing(input,options={}){
   const integrity=analyzeCurves([...automatic.cutCurves,...manualSource],{tolerance});
   for(const error of integrity.errors)if(!errors.includes(error))errors.push(error);
   const normalized=new Map(automatic.curves.map(c=>[c.id,c]));
-  return {...automatic,curves:source.filter(c=>manualIds.has(c.id)).concat([...normalized.values()]),cutCurves:[...automatic.cutCurves,...manualSource],jobs:jobs.map((j,i)=>({...j,name:'Job '+String(i+1).padStart(2,'0')})),errors,manualErrors};
+  return {...automatic,curves:source.filter(c=>manualIds.has(c.id)).concat([...normalized.values()]),cutCurves:[...automatic.cutCurves,...manualSource],jobs:jobs.map((j,i)=>({...j,name:'Job '+String(i+1).padStart(2,'0')})),errors,manualErrors,
+   topologyIssueIds:[...new Set([...automatic.topologyIssueIds,...integrity.topologyIssueIds])]};
  }
  const ignore=(c,reason)=>{if(!forceCut(c))ignored.set(c.id,reason);};
  for(const c of source){
@@ -185,7 +186,16 @@ export function prepareDrawing(input,options={}){
  if(unresolved.length)result.errors.push(`${unresolved.length} unclosed profile${unresolved.length===1?' needs':'s need'} repair or an explicit cutting decision. They are excluded from costing.`);
  if(editedBroken.length)result.errors.push('Edited job has an incomplete profile. Undo, repair it in CAD, or ignore its remaining geometry.');
  const groups=[...groupBy(source.filter(c=>ignored.has(c.id)),c=>ignored.get(c.id)).entries()].map(([reason,curves])=>({reason,count:curves.length,length:curves.reduce((s,c)=>s+curveLength(c),0),ids:curves.map(c=>c.id)}));
- return {...input,...result,curves:source,cutCurves:cut,ignoredCurves:source.filter(c=>ignored.has(c.id)).map(c=>({...c,ignoreReason:ignored.get(c.id)})),ignoredGroups:groups,frameCandidates:frameCandidates.filter(g=>g.ids.every(id=>!ignored.has(id))),unresolvedProfiles:unresolved.length,junctionCount:junctions.junctionCount,analysisVersion:ANALYSIS_VERSION,
+ const repairCandidates=unresolved.map(profile=>({
+  ids:[...profile.curves,...closed.filter(contour=>encloses(profile,contour)).flatMap(contour=>contour.curves)].map(c=>c.id),
+  message:'The outside profile has an open gap.'
+ }));
+ for(const curves of editedBroken){
+  const ids=new Set(curves.map(c=>c.id));
+  if(!repairCandidates.some(candidate=>candidate.ids.some(id=>ids.has(id))))
+   repairCandidates.push({ids:[...ids],message:'This edited job has an incomplete profile.'});
+ }
+ return {...input,...result,curves:source,cutCurves:cut,ignoredCurves:source.filter(c=>ignored.has(c.id)).map(c=>({...c,ignoreReason:ignored.get(c.id)})),ignoredGroups:groups,frameCandidates:frameCandidates.filter(g=>g.ids.every(id=>!ignored.has(id))),repairCandidates,unresolvedProfiles:unresolved.length,junctionCount:junctions.junctionCount,analysisVersion:ANALYSIS_VERSION,
   unit:input.unit||result.unit,detectedUnit:input.detectedUnit,layers:input.layers||result.layers,duplicates:input.duplicates||0,
   detectionNotes:[...(junctions.junctionCount?[`${junctions.junctionCount} endpoint-on-edge junction${junctions.junctionCount===1?'':'s'} recognised. Exact curve lengths are retained; dangling extensions are excluded.`]:[]),...(boundary.recovered?[`${boundary.recovered} outside profile${boundary.recovered===1?'':'s'} recovered from bend / shared-line networks. Verify those boundaries before quoting.`]:[]),...(text.length?['Outline lettering detected. Use Show ignored to inspect formatting or restore intentional lettering cuts.']:[])],
   issues:[...(input.issues||[]).filter(e=>!/annotation entities ignored/.test(e)),...result.issues,...(groups.length?[`${source.length-cut.length} drawing elements excluded from costing.`]:[])]};

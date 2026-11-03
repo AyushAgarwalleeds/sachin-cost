@@ -21,6 +21,7 @@ import {tagResult,migrateWorkspace,preserveJobInputs,mergeProjectHistory} from '
 import CadPreview from './CadPreview.jsx';
 import {assignManualJob} from './manual-jobs.js';
 import {csvCell} from './csv.js';
+import {repairForEstimate} from './estimate-repair.js';
 import './styles.css';
 import './job-controls.css';
 
@@ -33,6 +34,8 @@ export default function App(){
   const [desktop,setDesktop]=useState(matchMedia('(pointer:fine) and (min-width:900px)').matches);
   const [cadSource,setCadSource]=useState(null),[cadKey,setCadKey]=useState(0),[elementUndo,setElementUndo]=useState([]),[shareRecord,setShareRecord]=useState(null),[previewSelection,setPreviewSelection]=useState(null);
   const liveWorkspace=useRef(workspace);liveWorkspace.current=workspace;
+  const [activeIssue,setActiveIssue]=useState(null);
+  const [repairError,setRepairError]=useState('');
   const fileInput=useRef(),backupInput=useRef(),loaded=useRef(false),worker=useRef(),pending=useRef(new Map()),saveQueue=useRef(Promise.resolve());
   const [batch,setBatch]=useState({material:'MS',thickness:10,quantity:1,kgRate:0});
   const notify=(message,type='success')=>setToast({message,type,id:Date.now()});
@@ -58,7 +61,7 @@ export default function App(){
   useEffect(()=>{const fn=e=>{if(e.key==='Escape')setModal(null);};window.addEventListener('keydown',fn);return()=>window.removeEventListener('keydown',fn);},[]);
   useEffect(()=>{const query=matchMedia('(pointer:fine) and (min-width:900px)'),fn=e=>setDesktop(e.matches);query.addEventListener('change',fn);return()=>query.removeEventListener('change',fn);},[]);
   useEffect(()=>{
-    if(!loaded.current||!workspace||workspace.isDemo||!workspace.unitsConfirmed||!workspace.jobs.some(j=>j.included)||workspace.files.some(f=>f.result.errors.length)||workspace.jobs.filter(j=>j.included).some(j=>!j.reviewed||jobProblems(j,settings,workspace.options.withMaterial).length))return;
+    if(!loaded.current||!workspace||workspace.isDemo||!workspace.unitsConfirmed||!workspace.jobs.some(j=>j.included)||workspace.files.some(f=>f.result.errors.length)||workspace.jobs.filter(j=>j.included).some(j=>j.estimateOnly||!j.reviewed||jobProblems(j,settings,workspace.options.withMaterial).length))return;
     const timer=setTimeout(()=>{try{saveRecord(createRecord(workspace,settings,quote,'estimate')).catch(()=>notify('The costing history could not be saved. Download a project backup.','error'));}catch{}},2000);return()=>clearTimeout(timer);
   },[workspace,settings,quote]);
   useEffect(()=>{const fn=()=>flushRecords().catch(()=>{});window.addEventListener('online',fn);fn();return()=>window.removeEventListener('online',fn);},[]);
@@ -121,8 +124,35 @@ export default function App(){
   const removeElements=(ids,options)=>editDrawing(ids,options);
   function undoGeometry(){const previous=elementUndo.at(-1);if(previous){setWorkspace({...workspace,files:previous.files,jobs:preserveJobInputs(previous.jobs,workspace.jobs,settings.defaultThickness,{preserveUnmatched:true}),updatedAt:Date.now()});setElementUndo(a=>a.slice(0,-1));setSelected(null);notify('Geometry restored. Review the restored jobs.');}}
   async function openProject(p){if(busy)return;setBusy(true);try{archiveCurrent(false);setElementUndo([]);setWorkspace(await refreshWorkspace(clone(p)));setQuote(clone(p.quote||DEFAULT_QUOTE));setSelected(null);setChecked([]);setView('estimate');}finally{setBusy(false);}}
-  function openCad(fromDrawing=false){
-    setCadSource(fromDrawing?{name:workspace.name,dimensions:workspace.files.flatMap(f=>f.dimensions||[]),curves:workspace.files.flatMap(f=>{const ignored=new Map((f.result.ignoredCurves||[]).map(c=>[c.id,c.ignoreReason]));return f.result.curves.map(c=>ignored.has(c.id)?{...c,cutIntent:'ignore',ignoreReason:ignored.get(c.id)}:c);}),layers:[...new Set(workspace.files.flatMap(f=>f.result.layers))],importErrors:workspace.files.flatMap(f=>f.result.importErrors||[]),workspaceId:workspace.id,ignoredIds:workspace.files.flatMap(f=>(f.result.ignoredCurves||[]).map(c=>c.id)),annotations:workspace.files.flatMap(f=>f.result.annotations||[])}:null);setCadKey(k=>k+1);setView('cad');setMenu(false);
+  function openCad(fromDrawing=false,repairIds=[]){
+    const repairing=new Set(repairIds);
+    setCadSource(fromDrawing?{name:workspace.name,dimensions:workspace.files.flatMap(f=>f.dimensions||[]),curves:workspace.files.flatMap(f=>{
+      const ignored=new Map((f.result.ignoredCurves||[]).map(c=>[c.id,c.ignoreReason]));
+      return f.result.curves.map(c=>repairing.has(c.id)?{...c,cutIntent:undefined,ignoreReason:undefined}:
+        ignored.has(c.id)?{...c,cutIntent:'ignore',ignoreReason:ignored.get(c.id)}:c);
+    }),layers:[...new Set(workspace.files.flatMap(f=>f.result.layers))],importErrors:workspace.files.flatMap(f=>f.result.importErrors||[]),workspaceId:workspace.id,ignoredIds:workspace.files.flatMap(f=>(f.result.ignoredCurves||[]).filter(c=>!repairing.has(c.id)).map(c=>c.id)),annotations:workspace.files.flatMap(f=>f.result.annotations||[])}:null);
+    setCadKey(k=>k+1);setView('cad');setMenu(false);setModal(null);
+  }
+  function openIssue(issue){
+    setActiveIssue(issue);
+    setRepairError('');
+    setModal('job-issue');
+  }
+  function applyEstimateRepair(issue){
+    setRepairError('');
+    try{
+      const file=workspace.files.find(f=>f.id===issue.fileId);
+      const ids=new Set(issue.ids);
+      if(workspace.jobs.some(j=>j.estimateOnly&&j.repairIds.some(id=>ids.has(id))))
+        throw new Error('A provisional job already uses this geometry.');
+      const job=repairForEstimate(file,issue.ids,settings.tolerance);
+      const name='Provisional job '+(workspace.jobs.filter(j=>j.estimateOnly).length+1);
+      update(w=>({...w,jobs:[...w.jobs,{...job,name,thickness:settings.defaultThickness}]}));
+      setSelected(job.id);
+      setSearch('');
+      setModal('job');
+      notify('Provisional job added to costing. The original drawing still needs repair.');
+    }catch(error){setRepairError(error.message);}
   }
   async function useCad(data){
     setBusy(true);try{
@@ -195,11 +225,12 @@ export default function App(){
   async function exportJobs(){
     const jobs=workspace.jobs.filter(j=>j.included&&(!checked.length||checked.includes(j.id)));
     if(!jobs.length)return notify('Select at least one included job.','error');
+    if(jobs.some(job=>job.estimateOnly))return notify('Repair provisional jobs in CAD before exporting DXFs.','error');
     const zip=new JSZip(),names=exportFilenames(jobs);jobs.forEach((j,i)=>zip.file(names[i],exportDxf(j)));
     zip.file('job-list.csv','Filename,Job,Thickness mm,Material,Quantity,Cut length mm per piece,Piercings per piece\n'+jobs.map((j,i)=>[names[i],j.name,j.thickness,j.material,j.quantity,j.length,j.piercings].map(csvCell).join(',')).join('\n'));
     downloadBlob(await zip.generateAsync({type:'blob'}),`${workspace.name.replace(/[^a-zA-Z0-9 -]/g,'').slice(0,70)||'cutting-jobs'}-jobs.zip`);notify(`${jobs.length} individual DXF files exported in a ZIP.`);
   }
-  function csv(){const t=estimate(workspace.jobs,settings,workspace.options);downloadBlob(new Blob(['Job,Material,Thickness mm,Quantity,Cut mm per piece,Piercings per piece,Weight kg per piece,Unit INR,Total INR\n'+t.rows.map(r=>[r.job.name,r.job.material,r.job.thickness,r.job.quantity,r.length,r.piercings,r.weight??'',r.unit,r.total].map(csvCell).join(',')).join('\n')],{type:'text/csv'}),'cost-by-ayush-breakdown.csv');}
+  function csv(){const t=estimate(workspace.jobs,settings,workspace.options);downloadBlob(new Blob(['Job,Material,Thickness mm,Quantity,Cut mm per piece,Piercings per piece,Weight kg per piece,Unit INR,Total INR,Status\n'+t.rows.map(r=>[r.job.name,r.job.material,r.job.thickness,r.job.quantity,r.length,r.piercings,r.weight??'',r.unit,r.total,r.job.estimateOnly?'PROVISIONAL - ESTIMATE ONLY':r.job.reviewed?'Reviewed':'Needs review'].map(csvCell).join(',')).join('\n')],{type:'text/csv'}),'cost-by-ayush-breakdown.csv');}
   async function installApp(){if(install){await install.prompt();setInstall(null);}else setModal('install');}
   if(!workspace)return <div className="loading"><Zap/><p>Opening your cutting workspace…</p></div>;
   const totals=estimate(workspace.jobs,settings,workspace.options),included=workspace.jobs.filter(j=>j.included);
@@ -207,7 +238,13 @@ export default function App(){
   const validation=included.flatMap(j=>jobProblems(j,settings,workspace.options.withMaterial).map(e=>`${j.name}: ${e}`));
   if(!Number.isFinite(totals.total))validation.push('Quotation total exceeds the supported numeric range.');
   const unreviewed=included.filter(j=>!j.reviewed).length;
-  const ready=included.length>0&&!importErrors.length&&!validation.length&&workspace.unitsConfirmed&&!unreviewed;
+  const hasProvisional=included.some(j=>j.estimateOnly);
+  const ready=included.length>0&&!importErrors.length&&!validation.length&&!hasProvisional&&workspace.unitsConfirmed&&!unreviewed;
+  const repairs=workspace.files.flatMap(file=>[
+    ...(file.result.repairCandidates||[]).map(issue=>({...issue,fileId:file.id,fileName:file.name,auto:true})),
+    ...(file.result.manualErrors||[]).map(issue=>({...issue,fileId:file.id,fileName:file.name,auto:true}))
+  ]);
+  const topologyIssues=new Set(workspace.files.flatMap(file=>file.result.topologyIssueIds||[]));
   const visible=workspace.jobs.filter(j=>(j.name+' '+j.material).toLowerCase().includes(search.toLowerCase()));
   const current=workspace.jobs.find(j=>j.id===selected);
   function requestQuote(){if(!ready){setModal('review');return;}setQuote(q=>({...q,customer:q.customer||workspace.customer}));setModal('quotation');}
@@ -249,22 +286,41 @@ export default function App(){
               </section>
               <CleanupPanel files={workspace.files} busy={busy} onDelete={removeElements} onRedetect={()=>editDrawing([],{redetect:true})} onIgnore={ids=>editDrawing(ids,{intent:'ignore'})} onInspect={ids=>setPreviewSelection({ids,key:crypto.randomUUID()})} onManualOnly={fileId=>editDrawing(workspace.files.find(f=>f.id===fileId).result.curves.filter(c=>!c.manualJobId).map(c=>c.id),{intent:'ignore'})} onRestore={ids=>editDrawing(ids,{intent:'cut'})} onOpenCad={()=>openCad(true)} canUndo={elementUndo.length>0} onUndo={undoGeometry}/>{!workspace.unitsConfirmed&&workspace.jobs.length>0&&<div className="notice warning"><Ruler size={18}/><div><b>Confirm drawing units before quoting</b><p>{workspace.files.map(f=>`${f.name}: ${f.result.detectedUnit?`detected ${f.result.detectedUnit}`:'units not specified (assumed mm)'}`).join(' · ')}</p></div><button className="button small secondary" onClick={()=>setModal('drawing')}>Check units</button></div>}
               {importErrors.length>0&&<button className="notice danger notice-button" onClick={()=>setModal('review')}><AlertTriangle size={18}/><div><b>{importErrors.length} drawing issue{importErrors.length===1?'':'s'} need attention</b><p>Open the review to see what needs fixing.</p></div><ChevronRight size={18}/></button>}
+              {hasProvisional&&<div className="notice warning"><AlertTriangle size={18}/><div><b>Estimate includes provisional jobs</b><p>Repair the original geometry before creating a quotation or exporting production DXFs.</p></div></div>}
               <section className="jobs-card card"><div className="card-header"><div className="card-title"><Package size={18}/><h2>Extracted jobs</h2><span className="count-pill">{workspace.jobs.length}</span></div><div className="jobs-header-actions"><button className="plain-button" disabled={!workspace.jobs.length} onClick={()=>setModal('batch')}><SlidersHorizontal size={15}/>Batch edit</button><button className="plain-button desktop-export" disabled={!desktop||!ready} title={!desktop?'Individual CAD export is available on desktop':!ready?'Confirm units and review jobs first':'Download individual DXFs in a ZIP'} onClick={exportJobs}><Download size={15}/>Export DXFs</button></div></div>
                 <div className="job-toolbar"><label className="job-select-all"><input type="checkbox" aria-label="Select all jobs" checked={visible.length>0&&visible.every(j=>checked.includes(j.id))} onChange={e=>setChecked(e.target.checked?visible.map(j=>j.id):[])}/><span>All</span></label><div className="search"><Search size={15}/><input placeholder="Find a job or material…" aria-label="Search jobs" value={search} onChange={e=>setSearch(e.target.value)}/></div><span>{checked.length?`${checked.length} selected`:`${included.length} of ${workspace.jobs.length} included`}</span><button className="plain-button" onClick={()=>{setModal('review');}}><CheckCheck size={15}/>Review jobs</button></div>
-                <div className="jobs-table-wrap"><table className="jobs-table"><thead><tr><th aria-label="Selection"/><th>JOB / PART</th><th>MATERIAL</th><th>THICKNESS</th><th>QTY.</th><th className="right">AMOUNT</th><th/></tr></thead><tbody>{visible.map((job,i)=>{
+                {repairs.length>0&&<ul className="job-issue-list" aria-label="Jobs with drawing errors">
+                  {repairs.map((issue,i)=>{
+                    const added=workspace.jobs.some(job=>job.estimateOnly&&job.repairIds.includes(issue.ids[0]));
+                    return <li key={issue.ids[0]}>
+                      <button className="job-error-button" aria-label={`Fix drawing issue ${i+1}`} onClick={()=>openIssue(issue)}><X size={15}/></button>
+                      <div><b>{issue.fileName}</b><small>{issue.message}{added?' Provisional estimate added.':''}</small></div>
+                      <button className="plain-button" onClick={()=>openIssue(issue)}>Fix issue</button>
+                    </li>;
+                  })}
+                </ul>}
+                <div className="jobs-table-wrap"><table className="jobs-table"><thead><tr><th aria-label="Selection"/><th>JOB / PART</th><th>MATERIAL</th><th>THICKNESS</th><th>QTY.</th><th className="right">AMOUNT</th><th/></tr></thead><tbody>{visible.map(job=>{
                   const cost=costJob(job,settings,workspace.options.withMaterial),problems=jobProblems(job,settings,workspace.options.withMaterial);
+                  const geometryIssue=job.curves.some(c=>topologyIssues.has(c.id));
+                  const hasIssue=problems.length>0||geometryIssue||job.estimateOnly;
                   return <tr key={job.id} className={`${selected===job.id?'selected':''} ${!job.included?'excluded':''}`} onClick={()=>setSelected(selected===job.id?null:job.id)}>
                     <td onClick={e=>e.stopPropagation()}><input type="checkbox" aria-label={`Select ${job.name}`} checked={checked.includes(job.id)} onChange={e=>setChecked(a=>e.target.checked?[...a,job.id]:a.filter(id=>id!==job.id))}/></td>
-                    <td><div className="job-name-cell"><div className="part-thumbnail"><MiniShape job={job}/></div><div><b>{job.name}</b><small>{num(cost.length)} mm <span>·</span> {cost.piercings} pierces {job.open&&<span className="tiny-warning">· open cut</span>}</small></div></div></td>
+                    <td><div className="job-name-cell"><div className="part-thumbnail"><MiniShape job={job}/></div><div><b>{job.name}</b><small>{num(cost.length)} mm <span>·</span> {cost.piercings} pierces {job.open&&<span className="tiny-warning">· open cut</span>}</small></div>
+                      {hasIssue&&<button className="job-error-button" aria-label={`Fix ${job.name}`} onClick={e=>{
+                        e.stopPropagation();setSelected(job.id);
+                        openIssue({jobId:job.id,fileId:job.fileId,ids:job.repairIds||job.curves.map(c=>c.id),
+                          message:job.estimateOnly?'This part uses an estimate-only gap repair.':geometryIssue?'This job has touching, overlapping or branching cutting geometry.':null,problems});
+                      }}><X size={15}/></button>}
+                    </div></td>
                     <td data-label="Material" onClick={e=>e.stopPropagation()}><select aria-label={`Material for ${job.name}`} className={`material-select ${job.material.toLowerCase()}`} value={job.material} onChange={e=>updateJob(job.id,{material:e.target.value})}>{Object.keys(settings.materials).map(m=><option key={m}>{m}</option>)}</select></td>
                     <td data-label="Thickness" onClick={e=>e.stopPropagation()}><div className="unit-input"><input type="number" inputMode="decimal" min="0.01" step="any" aria-label={`Thickness for ${job.name}`} value={job.thickness||''} onChange={e=>updateJob(job.id,{thickness:inputNumber(e)})}/><span>mm</span></div></td>
                     <td data-label="Quantity" onClick={e=>e.stopPropagation()}><input type="number" inputMode="numeric" min="1" step="1" className="qty-input" aria-label={`Quantity for ${job.name}`} value={job.quantity||''} onChange={e=>updateJob(job.id,{quantity:inputNumber(e)})}/></td>
-                    <td className="right"><b className="amount">{money(cost.total)}</b><small className={problems.length?'error-text':job.reviewed?'verified':'pending-review'}>{problems.length?'Check inputs':job.reviewed?'Reviewed':'Needs review'}</small></td>
+                    <td className="right"><b className="amount">{money(cost.total)}</b><small className={hasIssue?'error-text':job.reviewed?'verified':'pending-review'}>{job.estimateOnly?'Provisional · estimate only':geometryIssue?'Repair geometry':problems.length?'Check inputs':job.reviewed?'Reviewed':'Needs review'}</small></td>
                     <td><button className="icon-btn" aria-label={`Edit ${job.name}`} onClick={e=>{e.stopPropagation();setSelected(job.id);setModal('job');}}><ChevronRight size={17}/></button></td>
                   </tr>;
-                })}</tbody></table>{!visible.length&&<div className="empty-jobs"><Package size={25}/><p>{workspace.jobs.length?'No matching jobs.':'Import a drawing to extract your first jobs.'}</p></div>}</div>
+                })}</tbody></table>{!visible.length&&<div className="empty-jobs"><Package size={25}/><p>{workspace.jobs.length?'No matching jobs.':repairs.length?'Open a job issue above to see repair options.':'Import a drawing to extract your first jobs.'}</p></div>}</div>
                 <div className="jobs-footer"><Info size={14}/><span>Click a row to highlight its geometry. Use <b>›</b> to edit details.</span>{checked.length>1&&<button className="plain-button" onClick={()=>{
-                  const jobs=workspace.jobs.filter(j=>checked.includes(j.id));if(jobs.some(j=>!j.included))return notify('Include selected jobs before merging.','error');
+                  const jobs=workspace.jobs.filter(j=>checked.includes(j.id));if(jobs.some(j=>j.estimateOnly))return notify('Repair provisional jobs in CAD before combining.','error');if(jobs.some(j=>!j.included))return notify('Include selected jobs before merging.','error');
                   const merged=jobFromContours(jobs.flatMap(j=>j.contours),jobs.some(j=>j.area===null)?null:jobs.reduce((s,j)=>s+j.area,0));
                   update(w=>({...w,jobs:[...w.jobs.filter(j=>!checked.includes(j.id)),{...merged,name:'Combined job',fileId:jobs[0].fileId,sourceFileIds:[...new Set(jobs.flatMap(j=>j.sourceFileIds||[j.fileId]))]}]}));setChecked([]);notify('Jobs combined. Review material, thickness, quantity and piercing count.');
                 }}><Merge size={14}/>Combine selected</button>}</div>
@@ -299,8 +355,27 @@ export default function App(){
       </main>
     </div>
     {toast&&<div className={`toast ${toast.type}`} role="status">{toast.type==='error'?<AlertTriangle size={19}/>:<CheckCircle2 size={19}/>}<span>{toast.message}</span><button className="icon-btn" aria-label="Dismiss message" onClick={()=>setToast(null)}><X size={16}/></button></div>}
-    {modal&&<Modal title={{job:current?.name||'Job details',review:'Review your drawing & jobs',drawing:'Drawing units & layers',batch:'Edit jobs together',material:'Material prices & weights',quotation:'Create your quotation',share:'Share quotation',help:'A clear path from CAD to cost',install:'Install Cost by Ayush',project:'Project options'}[modal]} onClose={()=>setModal(null)} wide={['quotation','review','material','share'].includes(modal)}>
-      {modal==='job'&&current&&<JobEditor job={current} settings={settings} withMaterial={workspace.options.withMaterial} onChange={patch=>updateJob(current.id,patch)} onClose={()=>setModal(null)}/>}
+    {modal&&<Modal title={{job:current?.name||'Job details','job-issue':'Fix job issue',review:'Review your drawing & jobs',drawing:'Drawing units & layers',batch:'Edit jobs together',material:'Material prices & weights',quotation:'Create your quotation',share:'Share quotation',help:'A clear path from CAD to cost',install:'Install Cost by Ayush',project:'Project options'}[modal]} onClose={()=>setModal(null)} wide={['quotation','review','material','share'].includes(modal)}>
+      {modal==='job'&&current&&<>
+        {current.estimateOnly&&<p className="notice warning">Estimate only. A {num(current.repairGap,4)} mm gap was bridged on a temporary copy. Repair the original before quoting or exporting.</p>}
+        <JobEditor job={current} settings={settings} withMaterial={workspace.options.withMaterial} onChange={patch=>updateJob(current.id,patch)} onClose={()=>setModal(null)}/>
+      </>}
+      {modal==='job-issue'&&activeIssue&&<div className="job-issue-dialog">
+        {activeIssue.fileName&&<h3>{activeIssue.fileName}</h3>}
+        {activeIssue.message&&<p>{activeIssue.message}</p>}
+        {activeIssue.problems?.length>0&&<ul>{activeIssue.problems.map(problem=><li key={problem}>{problem}</li>)}</ul>}
+        {activeIssue.auto&&<p>Auto-fix can bridge one gap up to 0.5 mm for provisional costing. Your original drawing stays intact and needs a CAD repair before production.</p>}
+        {repairError&&<p className="notice danger" role="alert">{repairError}</p>}
+        <div className="modal-actions">
+          {activeIssue.jobId&&<button className="button secondary" onClick={()=>setModal('job')}>Edit job inputs</button>}
+          {activeIssue.message&&<><button className="button secondary" onClick={()=>{setPreviewSelection({ids:activeIssue.ids,key:crypto.randomUUID()});setModal(null);}}>Highlight geometry</button>
+            <button className="button secondary" onClick={()=>openCad(true,activeIssue.ids)}>Repair in CAD</button></>}
+          {activeIssue.auto&&<button className="button primary" onClick={()=>applyEstimateRepair(activeIssue)}>Auto-fix for estimate</button>}
+          {workspace.jobs.some(job=>job.id===activeIssue.jobId&&job.estimateOnly)&&<button className="button secondary" onClick={()=>{
+            update(w=>({...w,jobs:w.jobs.filter(j=>j.id!==activeIssue.jobId)}));setSelected(null);setModal(null);
+          }}>Remove provisional job</button>}
+        </div>
+      </div>}
       {modal==='review'&&<div className="review-content"><div className="notice info"><ShieldCheck size={20}/><p>Check that each outer outline is a part, inner outlines are holes, and piercing counts match your cutting process. Open cuts need one start per connected contour.</p></div>{importErrors.map((e,i)=><div className="notice danger" key={i}><AlertTriangle size={17}/><p>{e}</p></div>)}{validation.map((e,i)=><div className="notice warning" key={i}><Info size={17}/><p>{e}</p></div>)}{issues.length>0&&<details className="review-details"><summary>Import notes ({issues.length})</summary>{issues.map((i,n)=><p key={n}>{i}</p>)}</details>}<label className="review-unit"><input type="checkbox" checked={workspace.unitsConfirmed} onChange={e=>update(w=>({...w,unitsConfirmed:e.target.checked}))}/><span><b>I have checked the drawing units and dimensions.</b><small>Current units: {workspace.files.map(f=>`${f.name}: ${f.result.unit}`).join(' · ')||'no drawings'}</small></span><button className="plain-button" onClick={()=>setModal('drawing')}>Change</button></label>
         {included.map(j=><div className="review-row" key={j.id}><div className="part-thumbnail"><MiniShape job={j}/></div><div><b>{j.name}</b><small>{num(j.bounds.width,1)} × {num(j.bounds.height,1)} mm · {num(j.length)} mm cut · {j.piercingsOverride??j.piercings} starts{j.open?' · OPEN CUT':''}</small></div><button className="plain-button" onClick={()=>{setSelected(j.id);setModal('job');}}>Inspect</button><input type="checkbox" aria-label={`Reviewed ${j.name}`} checked={j.reviewed} onChange={e=>updateJob(j.id,{reviewed:e.target.checked})}/></div>)}
         <div className="modal-actions"><button className="button secondary" onClick={()=>update(w=>({...w,jobs:w.jobs.map(j=>j.included?{...j,reviewed:true}:j)}))} disabled={!included.length}>Mark included jobs reviewed</button><button className="button primary" disabled={!ready} onClick={()=>{setQuote(q=>({...q,customer:q.customer||workspace.customer}));setModal('quotation');}}>Continue to quotation<ArrowUpRight size={16}/></button></div>{importErrors.length>0&&<p className="field-hint">Drawing errors must be fixed in CAD, or their non-cutting layers explicitly excluded. Review checkboxes cannot bypass an incomplete import.</p>}</div>}

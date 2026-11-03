@@ -9,7 +9,7 @@ export function tagResult(result,fileId){
  const curves=(result.curves||[]).map(tag),jobs=(result.jobs||[]).map(j=>({...j,fileId,curves:j.curves.map(tag),contours:j.contours.map(c=>({...c,curves:c.curves.map(tag)}))}));
  const importErrors=result.importErrors||result.errors?.filter(e=>!/branching cut network|Intersecting, touching|No supported cutting|Overlapping outlines/.test(e))||[];
  const tagId=id=>id.startsWith(prefix)?id:prefix+id;
-  return {...result,curves,jobs,importErrors,cutCurves:result.cutCurves?.map(tag),ignoredCurves:result.ignoredCurves?.map(tag),ignoredGroups:result.ignoredGroups?.map(g=>({...g,ids:g.ids.map(tagId)})),frameCandidates:result.frameCandidates?.map(g=>({...g,ids:g.ids.map(tagId)})),manualErrors:result.manualErrors?.map(g=>({...g,ids:g.ids.map(tagId)})),annotations:result.annotations?.map(a=>({...a,id:tagId(a.id)}))};
+  return {...result,curves,jobs,importErrors,cutCurves:result.cutCurves?.map(tag),ignoredCurves:result.ignoredCurves?.map(tag),ignoredGroups:result.ignoredGroups?.map(g=>({...g,ids:g.ids.map(tagId)})),frameCandidates:result.frameCandidates?.map(g=>({...g,ids:g.ids.map(tagId)})),manualErrors:result.manualErrors?.map(g=>({...g,ids:g.ids.map(tagId)})),repairCandidates:result.repairCandidates?.map(g=>({...g,ids:g.ids.map(tagId)})),topologyIssueIds:result.topologyIssueIds?.map(tagId),annotations:result.annotations?.map(a=>({...a,id:tagId(a.id)}))};
 }
 export function migrateWorkspace(w){
  if(!w)return w;

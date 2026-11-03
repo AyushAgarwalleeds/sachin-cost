@@ -6,6 +6,7 @@ const RECORDS='costing-records-v2';let queue=Promise.resolve(),remoteQueue=Promi
 const changed=()=>{if(typeof window!=='undefined')window.dispatchEvent(new Event('cutcost-records-change'));};
 export const safeFilename=value=>String(value||'quotation').replace(/[<>:"/\\|?*\x00-\x1f]/g,'-').slice(0,100);
 export function createRecord(workspace,settings,quote,kind='quotation'){
+ if(workspace.jobs.some(job=>job.included&&job.estimateOnly))throw new Error('Repair provisional jobs in CAD before sharing.');
  const jobs=workspace.jobs.filter(j=>j.included).map(j=>Object.fromEntries(['id','name','material','thickness','quantity','length','piercings','area','kgRate','weightOverride','lengthOverride','piercingsOverride','bounds','included','reviewed','open'].map(k=>[k,j[k]])));
  if(!jobs.length||jobs.some(j=>jobProblems(j,settings,workspace.options.withMaterial).length))throw new Error('Resolve the job inputs before saving a shared estimate.');
  const totals=estimate(jobs,settings,workspace.options),id=kind==='estimate'?workspace.id:crypto.randomUUID(),now=new Date().toISOString();
@@ -14,7 +15,7 @@ export function createRecord(workspace,settings,quote,kind='quotation'){
  return {id,kind,quoteNumber:kind==='quotation'?quote.number:'',projectName:workspace.name,customer:quote.customer||workspace.customer||'',total:totals.total,status:kind==='estimate'?'draft':'ready',createdAt:now,updatedAt:now,syncState:'pending',payload:{app:'sachin-cutcost-record',version:1,id,kind,projectName:workspace.name,isDemo:workspace.isDemo,quote:capturedQuote,settings:structuredClone(settings),options:{...workspace.options},jobs,totals:{total:totals.total,cutting:totals.cutting,material:totals.material,weight:totals.weight,pieces:totals.pieces,length:totals.length},createdAt:now}};
 }
 export function validateRecord(payload){
- if(payload?.app!=='sachin-cutcost-record'||payload.version!==1||!Array.isArray(payload.jobs)||!payload.jobs.length||payload.jobs.length>1500||!payload.quote||!payload.options||!payload.settings)throw new Error('This is not a supported CutCost quotation file.');
+ if(payload?.app!=='sachin-cutcost-record'||payload.version!==1||!Array.isArray(payload.jobs)||!payload.jobs.length||payload.jobs.length>1500||!payload.quote||!payload.options||!payload.settings)throw new Error('This is not a supported Cost by Ayush quotation file.');
  if(!['quotation','estimate'].includes(payload.kind)||!/^[\da-f]{8}-[\da-f]{4}-[\da-f]{4}-[\da-f]{4}-[\da-f]{12}$/i.test(payload.id))throw new Error('Invalid record identifier.');
  if(typeof payload.projectName!=='string'||payload.projectName.length>300||!Number.isFinite(Date.parse(payload.createdAt))||typeof payload.options.withMaterial!=='boolean')throw new Error('Invalid record details.');
  const s=payload.settings;

@@ -239,11 +239,12 @@ export function analyzeCurves(curves, options={}){
   if(branched) addError(`${branched} branching cut network${branched===1?'':'s'} found. Shared edges / touching parts require CAD cleanup.`);
   if(contours.length>1500) throw new Error('More than 1,500 contours. Split the drawing for reliable review.');
   const collisions=findCollisions(contours);
-  if(collisions) addError('Intersecting, touching or overlapping contours detected. Clean up the drawing before quoting.');
+  if(collisions.size) addError('Intersecting, touching or overlapping contours detected. Clean up the drawing before quoting.');
   const jobs=extractJobs(contours);
   if(jobs.some(j=>j.area!==null&&j.area<0))addError('Overlapping outlines produce invalid material area. Clean up the outline grouping.');
   if(!jobs.length) addError('No supported cutting geometry found.');
-  return {jobs,curves:unique,issues,errors,importErrors,unit:options.unit||'mm',layers:[...new Set(unique.map(c=>c.layer||'0'))],duplicates,annotationCount};
+  const topologyIssueIds=[...new Set([...collisions,...contours.filter(c=>c.branched)].flatMap(c=>c.curves.map(curve=>curve.id).filter(Boolean)))];
+  return {jobs,curves:unique,issues,errors,importErrors,topologyIssueIds,unit:options.unit||'mm',layers:[...new Set(unique.map(c=>c.layer||'0'))],duplicates,annotationCount};
 }
 export function buildContours(curves, tolerance = .01) {
   const nodes=[],grid=new Map(),edges=[],closed=[], key=(x,y)=>`${x},${y}`;
@@ -301,17 +302,18 @@ function intersects(a,b,c,d) {
   return Math.abs(c1)<=e1&&between(c,a,b)||Math.abs(c2)<=e1&&between(d,a,b)||Math.abs(c3)<=e2&&between(a,c,d)||Math.abs(c4)<=e2&&between(b,c,d);
 }
 function findCollisions(contours) {
-  let count=0,checks=0;
+  const collisions=new Set();
+  let checks=0;
   for(let i=0;i<contours.length;i++)for(let j=i;j<contours.length;j++) {
     const a=contours[i],b=contours[j];if(a.branched||b.branched)continue;
     if(a.bounds.maxX<b.bounds.minX||b.bounds.maxX<a.bounds.minX||a.bounds.maxY<b.bounds.minY||b.bounds.maxY<a.bounds.minY)continue;
     outer:for(let k=1;k<a.points.length;k++)for(let l=1;l<b.points.length;l++) {
       if(i===j && (l<=k+1 || (k===1&&l===a.points.length-1&&a.closed)))continue;
       if(++checks>8000000) throw new Error('Geometry is too complex for reliable intersection checking. Split the drawing.');
-      if(intersects(a.points[k-1],a.points[k],b.points[l-1],b.points[l])){count++;break outer;}
+      if(intersects(a.points[k-1],a.points[k],b.points[l-1],b.points[l])){collisions.add(a);collisions.add(b);break outer;}
     }
   }
-  return count;
+  return collisions;
 }
 export function extractJobs(contours) {
   const closed=contours.filter(c=>c.closed).sort((a,b)=>b.area-a.area);
