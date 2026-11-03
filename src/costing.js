@@ -5,11 +5,12 @@ export const DEFAULT_SETTINGS = {
     COPPER: { name:'Copper', rate:30, density:8960 },
     ALUM: { name:'Aluminium', rate:25, density:2700 }
   },
-  rateUnit: 'mm', pierceThreshold:16, pierceLow:1, pierceHigh:2,
+  rateUnit: 'm', pierceThreshold:16, pierceLow:1, pierceHigh:2,
   tolerance:0.01, company:'Cost by Ayush', address:'', phone:'', email:'', gstin:'',
   terms:'Rates are based on the approved drawing and quantities. Material availability and delivery to be confirmed.',
   validity:15, defaultThickness:10
 };
+export const activeCostingSettings = settings => ({...settings,rateUnit:'m'});
 export const money = n => new Intl.NumberFormat('en-IN',{style:'currency',currency:'INR',maximumFractionDigits:2}).format(Number.isFinite(n)?n:0);
 export const num = (n,d=2) => new Intl.NumberFormat('en-IN',{maximumFractionDigits:d}).format(Number.isFinite(n)?n:0);
 export const roundMoney = n => Math.round((n+Number.EPSILON)*100)/100;
@@ -21,7 +22,9 @@ export function costJob(job,settings,withMaterial=false) {
   const length=job.lengthOverride??job.length*scale,piercings=job.piercingsOverride??job.piercings;
   const weight=job.weightOverride??(job.area===null?null:job.area*scale**2*job.thickness*material.density/1e9);
   const pierceRate=job.thickness>=settings.pierceThreshold?settings.pierceHigh:settings.pierceLow;
-  const cutting=roundMoney(length/(settings.rateUnit==='m'?1000:1)*job.thickness*material.rate);
+  // Saved quotation snapshots can still use the original millimetre rate.
+  const pricedLength=settings.rateUnit==='mm'?length:length/1000;
+  const cutting=roundMoney(pricedLength*job.thickness*material.rate);
   const piercing=roundMoney(piercings*pierceRate), materialCost=roundMoney(withMaterial?(weight??0)*job.kgRate:0);
   const unit=roundMoney(cutting+piercing+materialCost);
   return {length,piercings,weight,cutting,piercing,pierceRate,material:materialCost,unit,total:roundMoney(unit*job.quantity)};

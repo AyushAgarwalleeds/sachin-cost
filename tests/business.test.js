@@ -91,7 +91,7 @@ test('manual plate accounts for hole length, net weight, quantity and exact cost
   assert.ok(Math.abs(result.length-(320+10*Math.PI))<1e-8);
   assert.ok(Math.abs(result.weight-(6000-25*Math.PI)*10*7850/1e9)<1e-8);
   assert.equal(result.piercings,2);
-  assert.equal(result.total,56230.54);
+  assert.equal(result.total,60.22);
   const imported=prepareDrawing(parseDxf(exportDxf(manualPartJob(row)),{skipTopology:true}));
   assert.equal(imported.jobs.length,1);
   assert.equal(imported.jobs[0].piercings,2);

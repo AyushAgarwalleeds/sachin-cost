@@ -42,10 +42,10 @@ Filenames follow `16mm ms 1nos.dxf`, with collisions numbered `16mm ms 1nos 1.dx
 
 ## Confirmed pricing
 
-Length is **millimetres**, as specified:
+Drawings are measured in millimetres. Cutting charges use metres:
 
 ```text
-Per-piece cutting = length mm × thickness mm × material rate
+Per-piece cutting = cutting length in metres × thickness in mm × material rate
 Per-piece piercing = cutting starts × piercing charge
 Per-piece material = weight kg × price/kg   (when enabled)
 Job total = (cutting + piercing + material) × quantity

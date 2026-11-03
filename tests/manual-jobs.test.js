@@ -35,7 +35,7 @@ test('box selection encloses entire curves and does not clip or include crossing
 test('manual job measures outside and hole once and applies the exact pricing formula',()=>{
  const cs=[...rect(0,0,100,50),circle(50,25,5)],j=makeManualJob(cs,{id:'part'});
  assert.equal(j.piercings,2);assert.equal(j.area,5000-25*Math.PI);assert.ok(Math.abs(j.length-(300+10*Math.PI))<1e-9);
- assert.equal(costJob({...j,thickness:10,quantity:3},DEFAULT_SETTINGS).total,79545.81);
+ assert.equal(costJob({...j,thickness:10,quantity:3},DEFAULT_SETTINGS).total,85.53);
  const round=parseDxf(exportDxf(j));assert.equal(round.jobs.length,1);assert.ok(Math.abs(round.jobs[0].length-j.length)<1e-9);
 });
 test('manual partition removes its former outer formatting box and prevents double charging',()=>{
