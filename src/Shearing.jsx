@@ -12,6 +12,17 @@ const newRow=(name='Part',width=500,height=500)=>({id:crypto.randomUUID(),name,w
 const inputNumber=e=>e.target.value===''?'':Number(e.target.value);
 const dimensions=rect=>num(rect.width)+' × '+num(rect.height)+' mm';
 
+function LayoutLabel({rect,name,maxSize}){
+  const size=dimensions(rect);
+  const font=Math.min(maxSize,rect.height/(name?3.8:1.6),rect.width/(size.length*.62));
+  const x=rect.x+rect.width/2,y=rect.y+rect.height/2;
+  const nameFont=Math.min(font,rect.width/(Math.max(1,name?.length||0)*.65));
+  return <g className="shear-label">
+    {name&&<text x={x} y={y-font*.65} fontSize={nameFont}>{name}</text>}
+    <text x={x} y={y+(name?font*.55:0)} fontSize={font} fontWeight="600">{size}</text>
+  </g>;
+}
+
 export default function Shearing({settings}){
   const [sheet,setSheet]=useState({width:2500,height:1250});
   const [rows,setRows]=useState(()=>[newRow('Part A'),newRow('Part B',600,500),newRow('Part C',800,400)]);
@@ -31,6 +42,7 @@ export default function Shearing({settings}){
   const cost=rect=>roundMoney(weight(rect)*rate)+roundMoney(weight(rect)*materialRate);
   const placedCost=layout?.parts.reduce((sum,part)=>sum+cost(part),0);
   const chosen=layout?.parts.find(part=>part.id===selected);
+  const labelSize=Math.min(sheet.width/47,sheet.height/23);
   const select=part=>{setSelected(part.id);setPosition({x:part.x,y:part.y});};
   const invalidate=()=>{setLayout(null);setSelected(null);setMessage('');};
   const changeRow=(id,patch)=>{setRows(rows.map(row=>row.id===id?{...row,...patch}:row));invalidate();};
@@ -125,8 +137,10 @@ export default function Shearing({settings}){
     {message&&<p role="status">{message}</p>}
     {layout&&<section className="business-card">
       <h2>Sheet layout</h2>
-      <p>Drag a part to move it, or enter exact X and Y positions. The automatic layout uses straight splits. Check the cut sequence after manual moves.</p>
-      <svg className="shear-preview" ref={svg} viewBox={`0 0 ${sheet.width} ${sheet.height}`} aria-label="Mother sheet layout"
+      <p>Drag a part to move it, or enter exact X and Y positions. Dashed rectangles show remnants. Check the cut sequence after manual moves.</p>
+      <p className="shear-scroll-hint">Swipe across the preview to see the whole sheet.</p>
+      <div className="shear-viewport" tabIndex={0} aria-label="Scrollable sheet preview">
+      <svg className="shear-preview" ref={svg} viewBox={`0 ${-labelSize*2} ${sheet.width} ${sheet.height+labelSize*2}`} aria-label="Mother sheet layout"
         onPointerCancel={()=>{drag.current=null;setDragPreview(null);}}
         onPointerMove={event=>{if(drag.current)setDragPreview(dragPosition(event));}}
         onPointerUp={event=>{
@@ -135,19 +149,25 @@ export default function Shearing({settings}){
           if(!next||next.x===start.part.x&&next.y===start.part.y)return;
           move(start.part,{x:next.x,y:next.y});
         }}>
+        <text className="shear-sheet-size" x={sheet.width/2} y={-labelSize*.8} fontSize={labelSize}>Mother sheet · {dimensions(sheet)}</text>
         <rect width={sheet.width} height={sheet.height} className="shear-sheet"/>
-        {remnants.map((rect,i)=><rect key={i} {...rect} className="shear-remnant" vectorEffect="non-scaling-stroke"><title>{dimensions(rect)} remnant</title></rect>)}
+        {remnants.map((rect,i)=><g key={i}>
+          <title>{dimensions(rect)} remnant</title>
+          <rect {...rect} className="shear-remnant" vectorEffect="non-scaling-stroke"/>
+          <LayoutLabel rect={rect} maxSize={labelSize}/>
+        </g>)}
         {layout.parts.map(part=><g key={part.id} className={part.id===selected?'shear-part selected':'shear-part'} onPointerDown={event=>{
           const point=world(event);
           if(!point)return;
           select(part);drag.current={part,point};svg.current.setPointerCapture(event.pointerId);
         }}>
           <rect x={part.x} y={part.y} width={part.width} height={part.height} vectorEffect="non-scaling-stroke"/>
-          <text x={part.x+part.width/2} y={part.y+part.height/2} fontSize={Math.min(part.width/8,part.height/4,sheet.width/45)}>{part.name}</text>
+          <LayoutLabel rect={part} name={part.name} maxSize={labelSize}/>
         </g>)}
         {dragPreview&&<rect x={dragPreview.x} y={dragPreview.y} width={dragPreview.width} height={dragPreview.height}
           className={validPlacement(dragPreview,sheet,layout.parts)?'shear-drag':'shear-drag invalid'} vectorEffect="non-scaling-stroke"/>}
       </svg>
+      </div>
       <div className="business-grid">
         <label>Placed piece<select value={selected||''} onChange={e=>{const part=layout.parts.find(item=>item.id===e.target.value);if(part)select(part);else setSelected(null);}}><option value="">Select a piece</option>{layout.parts.map((part,index)=><option key={part.id} value={part.id}>{index+1}. {part.name} · {dimensions(part)}</option>)}</select></label>
         {chosen&&<>

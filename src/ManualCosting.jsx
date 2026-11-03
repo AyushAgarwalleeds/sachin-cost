@@ -10,25 +10,88 @@ const fresh = thickness => ({
   id:crypto.randomUUID(),name:'Part',shape:'rectangle',width:100,height:60,radius:0,
   diameter:50,innerDiameter:25,material:'MS',thickness,quantity:1,kgRate:0,holes:[]
 });
-function NumberField({label,value,change}){
-  return <label>{label}<input type="number" step="any" value={value} onChange={e=>change(e.target.value===''?'':Number(e.target.value))}/></label>;
+function NumberField({label,value,change,autoFocus=false}){
+  return <label>{label}<input type="number" step="any" autoFocus={autoFocus} value={value} onChange={e=>change(e.target.value===''?'':Number(e.target.value))}/></label>;
 }
 
 function downloadPart(job){
   downloadBlob(new Blob([exportDxf(job)],{type:'application/dxf'}),exportFilenames([job])[0]);
 }
 
-function PartPreview({job}){
+function PartPreview({job,row,update}){
+  const [selection,setSelection]=useState(null);
+  const [draft,setDraft]=useState({}),[error,setError]=useState('');
   const {minX,maxY,width,height}=job.bounds;
   const margin=Math.max(width,height)*.08;
+  const cutouts=row.cutouts||[];
+  const round=row.shape==='circle'||row.shape==='ring';
+  const ring=row.shape==='ring';
+  const band=ring?(row.diameter-row.innerDiameter)/2:height;
+  const usableHeight=band*.6,usableWidth=ring?Math.sqrt(width*band*.4):width*.6;
+  const columns=Math.max(1,Math.min(cutouts.length,Math.ceil(Math.sqrt(cutouts.length*usableWidth/usableHeight))));
+  const rows=Math.max(1,Math.ceil(cutouts.length/columns));
+  const cellWidth=usableWidth/columns,cellHeight=usableHeight/rows;
+  const top=-maxY+(ring?band*.2:height*.2);
   const path=job.contours.map(contour=>{
     const points=contour.curves.flatMap(curve=>sampleCurve(curve,Math.max(width,height)/1200));
     return points.map((p,i)=>(i?'L':'M')+p.x+','+(-p.y)).join(' ')+' Z';
   }).join(' ');
-  return <svg className="manual-preview" role="img" aria-label="Part outline and through holes"
-    viewBox={`${minX-margin} ${-maxY-margin} ${width+2*margin} ${height+2*margin}`}>
-    <path d={path} fillRule="evenodd" vectorEffect="non-scaling-stroke"/>
-  </svg>;
+  const activate=(kind,id,label)=>{
+    const pick=()=>{
+      setDraft(kind==='outline'||kind==='ring'?row:(kind==='holes'?row.holes:cutouts).find(item=>item.id===id));
+      setError('');
+      setSelection({kind,id});
+    };
+    return {role:'button',tabIndex:0,'aria-label':label,'aria-pressed':selection?.kind===kind&&selection.id===id,
+      onClick:pick,onKeyDown:e=>{if(e.key==='Enter'||e.key===' '){e.preventDefault();pick();}}};
+  };
+  const group=selection?.kind;
+  const items=group==='holes'?row.holes:cutouts;
+  const item=items.find(value=>value.id===selection?.id);
+  const fields=group==='outline'?(round?{diameter:'Outside diameter (mm)'}:{
+    width:'Overall length (mm)',height:'Overall width (mm)',...(row.shape==='rectangle'?{radius:'Corner radius (mm)'}:{})
+  }):group==='ring'?{innerDiameter:'Inside diameter (mm)'}:group==='holes'?{diameter:'Diameter (mm)',x:'X centre (mm)',y:'Y centre (mm)'}:
+    item?.shape==='circle'?{width:'Diameter (mm)'}:{width:'Length (mm)',height:'Width (mm)'};
+  const editingPart=group==='outline'||group==='ring';
+  function apply(e){
+    e.preventDefault();
+    const values=Object.fromEntries(Object.keys(fields).map(key=>[key,draft[key]]));
+    if(Object.values(values).some(value=>!Number.isFinite(value)))return setError('Enter a number in each dimension field.');
+    const patch=editingPart?values:{[group]:items.map(entry=>entry.id===item.id?{...entry,...values}:entry)};
+    try{
+      if(group!=='cutouts')manualPartJob({...row,...patch});
+      else if(Object.values(values).some(value=>value<=0))throw new Error('Cutout dimensions must be positive.');
+      update(patch);
+      setSelection(null);
+    }catch(e){setError(e.message);}
+  }
+  const circle=(x,y,r,{key,...attrs})=><circle key={key} {...attrs} cx={x} cy={-y} r={r} vectorEffect="non-scaling-stroke"/>;
+  return <div className="manual-preview-panel">
+    <p>Click the outline, a hole or a cutout to edit its dimensions.</p>
+    <svg className="manual-preview" role="group" aria-label="Interactive part preview"
+      viewBox={`${minX-margin} ${-maxY-margin} ${width+2*margin} ${height+2*margin}`}>
+      <path {...activate('outline',null,'Edit part outline dimensions')} d={path} fillRule="evenodd" vectorEffect="non-scaling-stroke"/>
+      {ring&&circle(row.diameter/2,row.diameter/2,row.innerDiameter/2,{...activate('ring',null,'Edit inside diameter'),className:'manual-hole'})}
+      {row.holes.map((hole,i)=>circle(hole.x,hole.y,hole.diameter/2,{key:hole.id,...activate('holes',hole.id,`Edit hole ${i+1} dimensions`),className:'manual-hole'}))}
+      {cutouts.map((cutout,i)=>{
+        const x=minX+(width-usableWidth)/2+(i%columns+.5)*cellWidth;
+        const y=top+(Math.floor(i/columns)+.5)*cellHeight;
+        const aspect=cutout.shape==='circle'?1:Math.max(.4,Math.min(2.5,cutout.width/cutout.height||1));
+        const h=Math.min(cellHeight*.78,cellWidth*.78/aspect),w=h*aspect;
+        return <g key={cutout.id} {...activate('cutouts',cutout.id,`Edit cutout ${i+1} dimensions`)} className="manual-cutout">
+          {cutout.shape==='circle'?<circle cx={x} cy={y} r={h/2} vectorEffect="non-scaling-stroke"/>:
+            <rect x={x-w/2} y={y-h/2} width={w} height={h} vectorEffect="non-scaling-stroke"/>}
+          <text x={x} y={y} fontSize={Math.min(h,w)*.58} aria-hidden="true">{i+1}</text>
+        </g>;
+      })}
+    </svg>
+    {selection&&(editingPart||item)&&<form className="business-grid manual-preview-fields" key={`${group}-${selection.id}`} onSubmit={apply}>
+      {Object.entries(fields).map(([key,label],index)=><NumberField key={key} label={label} value={draft[key]} autoFocus={index===0}
+        change={value=>setDraft({...draft,[key]:value})}/>)}
+      <button type="submit">Apply dimensions</button><button type="button" onClick={()=>setSelection(null)}>Cancel</button>
+      {error&&<p role="alert">{error}</p>}
+    </form>}
+  </div>;
 }
 
 export default function ManualCosting({settings,onEstimate,busy}){
@@ -99,10 +162,10 @@ export default function ManualCosting({settings,onEstimate,busy}){
           </div>)}
           <button disabled={row.holes.length>=100} onClick={()=>update(row.id,{holes:[...row.holes,{id:crypto.randomUUID(),x:roundPart?row.diameter/2:row.width/2,y:roundPart?row.diameter/2:row.height/2,diameter:10}]})}>Add hole</button>
         </details>
-        {job&&<PartPreview job={job}/>}
+        {job&&<PartPreview job={job} row={row} update={patch=>update(row.id,patch)}/>}
         {cutouts.length>0&&<section className="cutout-list">
           <h3>Cutouts ({cutouts.length})</h3>
-          <p>Shown separately because their positions are unspecified. For DXF or a drawing-based estimate, place the cutouts in CAD.</p>
+          <p>Numbered cutouts in the preview show approximate positions and sizes. Place the cutouts in CAD to export a production DXF.</p>
           {cutouts.map((cutout,i)=>{
             const change=patch=>update(row.id,{cutouts:cutouts.map(item=>item.id===cutout.id?{...item,...patch}:item)});
             const circular=cutout.shape==='circle';

@@ -1,12 +1,23 @@
-.cutout-symbol { width: 54px; height: 44px; fill: #e5f2e4; stroke: #396a49; stroke-width: 2; }
+.cutout-symbol { width: 54px; height: 44px; fill: #fff0d0; stroke: #8c541c; stroke-width: 2; }
 .cutout-list { padding: 12px; border: 1px solid #d9e6d8; border-radius: 8px; margin-bottom: 14px; }
-.shear-preview { display: block; width: 100%; max-height: 440px; touch-action: none; }
+.manual-preview-panel .manual-preview { width: min(100%, 620px); height: clamp(170px, 38vw, 280px); }
+.manual-preview [role=button] { cursor: pointer; }
+.manual-preview .manual-hole { fill: #f4faf4; stroke: #285c40; stroke-width: 1.5; }
+.manual-cutout :is(rect,circle) { fill: #fff0d0; stroke: #8c541c; stroke-width: 1.4; }
+.manual-cutout text { pointer-events: none; text-anchor: middle; dominant-baseline: central; fill: #56330f; font-weight: 700; }
+.manual-preview [aria-pressed=true]:is(path,circle),.manual-cutout[aria-pressed=true] :is(rect,circle) { stroke: #1665ad; stroke-width: 3; }
+.manual-preview-fields { margin-bottom: 12px; }
+.shear-viewport { overflow-x: auto; }
+.shear-preview { display: block; width: 100%; min-width: 610px; max-height: 440px; }
+.shear-scroll-hint { display: none; }
+@media (max-width: 700px) { .shear-scroll-hint { display: block; } }
 .shear-sheet { fill: #edf3e9; }
 .shear-remnant { fill: #f5f7ef; stroke: #a6b8a0; stroke-dasharray: 4 3; }
-.shear-part { cursor: grab; }
+.shear-part { cursor: grab; touch-action: none; }
 .shear-part rect { fill: #b6dbcb; stroke: #37705c; stroke-width: 1.5; }
 .shear-part.selected rect { fill: #84c8b1; stroke: #155744; stroke-width: 2.5; }
-.shear-part text { text-anchor: middle; dominant-baseline: central; fill: #163d31; pointer-events: none; }
+.shear-label,.shear-sheet-size { text-anchor: middle; dominant-baseline: central; fill: #344e41; pointer-events: none; }
+.shear-part .shear-label { fill: #163d31; }
 .studio-guide-tools{display:grid;gap:5px;margin:8px 0}
 .studio-guide-tools button[aria-pressed=true]{outline:2px solid #a9ce89;outline-offset:-2px}
 .studio .studio-curve.bend-line{stroke:#64adff;stroke-dasharray:8 4}
