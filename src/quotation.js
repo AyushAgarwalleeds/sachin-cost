@@ -40,7 +40,7 @@ export function buildQuotation(jobs,settings,options,quote,isDemo=false) {
     ['Material','material'],['Thk. mm','thickness'],['Qty.','quantity'],['Size mm','dimensions'],['Cut mm/pc','length'],['Pierces/pc','piercings'],['kg/pc','weight'],['Unit price','unit'],['Amount','amount']
   ].filter(([,key])=>columns[key])];
   const body=totals.rows.map((r,i)=>{
-    const j=r.job,values={index:i+1,name:j.name,material:j.material,thickness:num(j.thickness),quantity:j.quantity,dimensions:`${num(j.bounds.width,1)} x ${num(j.bounds.height,1)}`,length:num(r.length),piercings:r.piercings,weight:r.weight===null?'-':num(r.weight,3),unit:price(r.unit),amount:price(r.total)};
+    const j=r.job,values={index:i+1,name:j.name,material:j.material,thickness:num(j.thickness),quantity:j.quantity,dimensions:`${num(j.bounds.width*(j.pdfScale??1),1)} x ${num(j.bounds.height*(j.pdfScale??1),1)}`,length:num(r.length),piercings:r.piercings,weight:r.weight===null?'-':num(r.weight,3),unit:price(r.unit),amount:price(r.total)};
     return defs.map(([,key])=>clean(values[key]));
   });
   autoTable(doc,{startY:y,margin:{left:16,right:16,top:20,bottom:22},head:[defs.map(([label])=>label)],body,

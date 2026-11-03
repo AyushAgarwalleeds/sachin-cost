@@ -7,7 +7,7 @@ const changed=()=>{if(typeof window!=='undefined')window.dispatchEvent(new Event
 export const safeFilename=value=>String(value||'quotation').replace(/[<>:"/\\|?*\x00-\x1f]/g,'-').slice(0,100);
 export function createRecord(workspace,settings,quote,kind='quotation'){
  if(workspace.jobs.some(job=>job.included&&job.estimateOnly))throw new Error('Repair provisional jobs in CAD before sharing.');
- const jobs=workspace.jobs.filter(j=>j.included).map(j=>Object.fromEntries(['id','name','material','thickness','quantity','length','piercings','area','kgRate','weightOverride','lengthOverride','piercingsOverride','bounds','included','reviewed','open'].map(k=>[k,j[k]])));
+ const jobs=workspace.jobs.filter(j=>j.included).map(j=>Object.fromEntries(['id','name','material','thickness','quantity','length','piercings','area','kgRate','weightOverride','lengthOverride','piercingsOverride','bounds','included','reviewed','open','pdfSource','pdfScale'].map(k=>[k,j[k]])));
  if(!jobs.length||jobs.some(j=>jobProblems(j,settings,workspace.options.withMaterial).length))throw new Error('Resolve the job inputs before saving a shared estimate.');
  const totals=estimate(jobs,settings,workspace.options),id=kind==='estimate'?workspace.id:crypto.randomUUID(),now=new Date().toISOString();
  if(!Number.isFinite(totals.total))throw new Error('Quotation total exceeds the supported numeric range.');

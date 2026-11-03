@@ -1,0 +1,30 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import {jsPDF} from 'jspdf';
+import {getDocument,OPS} from 'pdfjs-dist/legacy/build/pdf.mjs';
+import {readPdfDrawing} from '../src/pdf-drawing.js';
+import {prepareDrawing} from '../src/job-detection.js';
+import {suggestPdfOutline,PDF_JOIN_TOLERANCE} from '../src/pdf-selection.js';
+import {makeManualJob} from '../src/manual-jobs.js';
+import {costJob,DEFAULT_SETTINGS,estimate,jobProblems} from '../src/costing.js';
+
+test('a vector PDF stays unpriced until a selected part is calibrated',async()=>{
+  const pdf=new jsPDF({unit:'mm'});
+  pdf.rect(20,20,60,40);
+  pdf.circle(40,40,5);
+  pdf.line(15,10,80,10);
+  pdf.rect(100,100,2,2);
+  const drawing=await readPdfDrawing(pdf.output('arraybuffer'),getDocument,OPS);
+  assert.deepEqual(prepareDrawing(drawing).jobs,[]);
+  const ids=new Set(suggestPdfOutline(drawing.curves));
+  const job={...makeManualJob(drawing.curves.filter(c=>ids.has(c.id)),{tolerance:PDF_JOIN_TOLERANCE}),pdfSource:true};
+  assert.equal(job.piercings,2);
+  assert.equal(estimate([job],DEFAULT_SETTINGS).rows.length,0);
+  assert.ok(jobProblems(job,DEFAULT_SETTINGS,false).some(error=>error.includes('PDF scale')));
+  const priced={...job,pdfScale:120/job.bounds.width};
+  const result=costJob(priced,DEFAULT_SETTINGS);
+  assert.ok(Math.abs(job.bounds.width-60)<.00002);
+  assert.ok(Math.abs(result.length-job.length*2)<.0002);
+  assert.ok(Math.abs(result.weight-job.area*4*10*7850/1e9)<.000002);
+  assert.equal(estimate([{...priced,included:false}],DEFAULT_SETTINGS).total,0);
+});

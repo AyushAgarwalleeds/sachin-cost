@@ -4,6 +4,7 @@ This application depends on the following projects. Package lock versions are au
 
 - LibreDWG-Web / GNU LibreDWG, GPL-3.0: https://github.com/mlightcad/libredwg-web and https://www.gnu.org/software/libredwg/. The DWG worker loads its WebAssembly binary, copied without modification from `@mlightcad/libredwg-web`. Corresponding upstream sources and build instructions are in that repository at the package's v0.8.3 release. This application's source is supplied alongside the build.
 - dxf-parser, MIT: https://github.com/gdsestimating/dxf-parser
+- PDF.js, Apache-2.0: https://github.com/mozilla/pdf.js
 - jsPDF, MIT: https://github.com/parallax/jsPDF
 - jsPDF-AutoTable, MIT: https://github.com/simonbengtsson/jsPDF-AutoTable
 - JSZip, MIT or GPL-3.0: https://github.com/Stuk/jszip

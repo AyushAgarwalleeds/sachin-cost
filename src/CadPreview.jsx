@@ -3,6 +3,7 @@ import {MousePointer2,BoxSelect,Hand,Trash2,Undo2,Pencil,ZoomIn,ZoomOut,Maximize
 import {sampleCurve,boundsOf,curveLength} from './geometry.js';
 import {hitCurve} from './cad-model.js';
 import {windowCurveIds} from './manual-jobs.js';
+import {suggestPdfOutline} from './pdf-selection.js';
 import {num} from './costing.js';
 import './preview.css';
 
@@ -13,7 +14,15 @@ export default function CadPreview({jobs,files=EMPTY,ignored=EMPTY,annotations=E
  const editable=!compact&&!!onDeleteElements;
  useEffect(()=>{if(compact)return;const canvas=svg.current,zoom=e=>{e.preventDefault();if(!drag.current)setCamera(c=>({...c,z:Math.max(.15,Math.min(40,c.z*(e.deltaY>0?.88:1.12)))}));};canvas.addEventListener('wheel',zoom,{passive:false});return()=>canvas.removeEventListener('wheel',zoom);},[compact]);
  const [includeIgnored,setIncludeIgnored]=useState(false);
+ const [pdfSelectionHint,setPdfSelectionHint]=useState('');
+ useEffect(()=>setPdfSelectionHint(''),[picked]);
  const boxing=mode==='box'||mode==='recover';
+ const pdfDrawing=files.find(file=>file.id===drawingId)?.format==='pdf'||files.length===1&&files[0].format==='pdf';
+ const lastPdf=files.findLast(file=>file.format==='pdf')?.id;
+ useEffect(()=>{
+  if(!lastPdf)return;
+  setDrawingId(lastPdf);setShowIgnored(true);setPartView(false);setMode('box');
+ },[workspaceKey,lastPdf]);
  const selectedFileId=jobs.find(job=>job.id===selected)?.fileId;
  useEffect(()=>{
   if(selectedFileId&&files.length>1)setDrawingId(selectedFileId);
@@ -43,7 +52,7 @@ export default function CadPreview({jobs,files=EMPTY,ignored=EMPTY,annotations=E
  const recovering=mode==='recover'||selectedCurves.some(c=>ignoredIds.has(c.id));
  async function create(){
   if(!selectedCurves.length||busy)return;
-  const ok=await onMakeJob(selectedCurves.map(c=>c.id),{allowOpen,preserveExisting:mode==='recover'});
+  const ok=await onMakeJob(selectedCurves.map(c=>c.id),{allowOpen:!pdfDrawing&&allowOpen,singlePart:pdfDrawing,preserveExisting:pdfDrawing||mode==='recover'});
   if(ok!==false){clear();setAllowOpen(false);setMode('select');}
  }
  function down(e){
@@ -57,14 +66,16 @@ export default function CadPreview({jobs,files=EMPTY,ignored=EMPTY,annotations=E
  }
  function up(e){const d=drag.current;if(!d)return;drag.current=null;setWindowBox(null);const p=world(e);if(!p)return;
   if(boxing&&!d.pan&&d.moved){
-   const candidates=mode==='recover'||includeIgnored?visibleCurves:visibleCurves.filter(c=>!ignoredIds.has(c.id));
+   const candidates=pdfDrawing||mode==='recover'||includeIgnored?visibleCurves:visibleCurves.filter(c=>!ignoredIds.has(c.id));
    const ids=windowCurveIds(candidates,d.start,p);
    setPicked(old=>d.add?[...new Set([...old,...ids])]:ids);
    return;
   }
   if(d.moved||d.pan)return;
   const matrix=svg.current.getScreenCTM(),hit=hitCurve(visibleCurves,p,8/Math.abs(matrix.a)),id=d.annotation||hit?.curve.id;
-  if(editable)setPicked(old=>id?d.add?old.includes(id)?old.filter(v=>v!==id):[...old,id]:[id]:[]);
+  const toggle=d.add||pdfDrawing&&boxing;
+  if(editable)setPicked(old=>id?toggle?old.includes(id)?old.filter(v=>v!==id):[...old,id]:[id]:[]);
+  if(pdfDrawing&&boxing)return;
   const job=hit?filtered.find(j=>j.curves.some(c=>c.id===hit.curve.id)):filtered.filter(j=>p.x>=j.bounds.minX&&p.x<=j.bounds.maxX&&p.y>=j.bounds.minY&&p.y<=j.bounds.maxY).sort((a,b)=>a.bounds.width*a.bounds.height-b.bounds.width*b.bounds.height)[0];
   onSelect?.(job?.id||null);
  }
@@ -86,17 +97,27 @@ export default function CadPreview({jobs,files=EMPTY,ignored=EMPTY,annotations=E
    {visibleAnnotations.filter(a=>a.text).map(a=><text data-annotation-id={a.id} className={`cad-annotation ${pickedIds.has(a.id)?'preview-picked-text':''}`} key={a.id} x={a.position.x} y={-a.position.y} fontSize={a.height||2.5}>{a.text.replaceAll('\\P',' ').slice(0,80)}</text>)}
    {windowBox&&<rect className="preview-window" x={Math.min(windowBox.a.x,windowBox.b.x)} y={-Math.max(windowBox.a.y,windowBox.b.y)} width={Math.abs(windowBox.a.x-windowBox.b.x)} height={Math.abs(windowBox.a.y-windowBox.b.y)} vectorEffect="non-scaling-stroke"/>}
   </svg>
-  {!jobs.length&&!sources.length&&!ignored.length&&<div className="empty-drawing"><div><FileUp size={31}/></div><h3>A drawing. A clear estimate.</h3><p>Drop your CAD files here to get started.</p><button className="button primary" onClick={emptyAction}>Choose drawing<Plus size={17}/></button><small>DXF & DWG · up to 30 MB each</small></div>}
+  {!jobs.length&&!sources.length&&!ignored.length&&<div className="empty-drawing"><div><FileUp size={31}/></div><h3>A drawing. A clear estimate.</h3><p>Drop your CAD files here to get started.</p><button className="button primary" onClick={emptyAction}>Choose drawing<Plus size={17}/></button><small>DXF, DWG & PDF · up to 30 MB each</small></div>}
   {!compact&&<><div className="cad-axis"><span>Y</span><i/><b>X</b></div><span className="cad-scale">{num(b.width,1)} × {num(b.height,1)} mm</span><div className="cad-controls"><button className="icon-btn" aria-label="Zoom out" onClick={()=>setCamera(c=>({...c,z:Math.max(.15,c.z/1.25)}))}><ZoomOut size={16}/></button><span>{Math.round(camera.z*100)}%</span><button className="icon-btn" aria-label="Zoom in" onClick={()=>setCamera(c=>({...c,z:Math.min(40,c.z*1.25)}))}><ZoomIn size={16}/></button><i/><button className="icon-btn" aria-label="Fit drawing" onClick={()=>setCamera({x:0,y:0,z:1})}><Maximize size={16}/></button></div></>}
   {busy&&<div className="busy-overlay"><LoaderCircle className="spin" size={27}/><b>Checking your drawing…</b><span>Recalculating jobs, cutting length and starts</span></div>}
  </div>{editable&&<div className="preview-selection-panel">
   {ignored.length>0&&<div className="recover-job-bar"><span><b>Missing a job?</b> Box its outline and holes to include it in costing.</span>
    <button className="button secondary" disabled={busy} aria-pressed={mode==='recover'} onClick={()=>beginBox('recover')}><BoxSelect size={16}/>Recover ignored job</button>
   </div>}
-  {files.length>1&&<label className="preview-file-picker">Drawing<select aria-label="Preview drawing" value={drawingId} onChange={e=>setDrawingId(e.target.value)}><option value="">All drawings</option>{files.map(f=><option key={f.id} value={f.id}>{f.name}</option>)}</select></label>}
+  {files.length>1&&<label className="preview-file-picker">Drawing<select aria-label="Preview drawing" value={drawingId} onChange={e=>{
+    const id=e.target.value;setDrawingId(id);
+    if(files.some(file=>file.id===id&&file.format==='pdf')){setShowIgnored(true);setPartView(false);setMode('box');}
+  }}><option value="">All drawings</option>{files.map(f=><option key={f.id} value={f.id}>{f.name}</option>)}</select></label>}
+  {pdfDrawing&&<div className="recover-job-bar"><span><b>PDF cutting view</b> Box one flat part and its holes. Tap a line to toggle it, then add the job and enter a known part dimension.</span></div>}
+  {pdfDrawing&&selectedCurves.length>0&&<button className="button secondary small" onClick={()=>{
+    const outlineIds=suggestPdfOutline(selectedCurves);
+    if(outlineIds.length)setPicked(outlineIds);
+    else setPdfSelectionHint('No closed outline found in this box. Adjust the box or toggle unwanted lines.');
+  }}>Suggest cutting outline</button>}
+  {pdfSelectionHint&&<p className="preview-instruction" role="status">{pdfSelectionHint}</p>}
   <p className="preview-instruction">{mode==='recover'?'Drag a box around the outline and all its holes. Check the highlighted lines, then add the job to costing.':mode==='box'?'Drag around the complete job and its holes. Only fully enclosed curves are selected. Recognised formatting is omitted by default. Shift adds to the selection.':mode==='pan'?'Drag to pan. Scroll to zoom.':'Click a line to highlight it. Shift-click adds or removes lines; drag to pan.'}</p>
-  {mode==='box'&&<label className="check-label preview-open-choice"><input type="checkbox" checked={includeIgnored} onChange={e=>{setIncludeIgnored(e.target.checked);clear();}}/>Include ignored geometry in box selection</label>}
+  {mode==='box'&&!pdfDrawing&&<label className="check-label preview-open-choice"><input type="checkbox" checked={includeIgnored} onChange={e=>{setIncludeIgnored(e.target.checked);clear();}}/>Include ignored geometry in box selection</label>}
   <div className="preview-selection-summary" role="status"><b>{picked.length?`${num(picked.length,0)} selected`:'Nothing selected'}</b>{selectedCurves.length>0&&<span>{num(selectedCurves.reduce((s,c)=>s+curveLength(c),0),3)} mm selected</span>}</div>
-  {picked.length>0&&<><div className="preview-selection-actions"><button className="button primary small" onClick={create} disabled={busy||!selectedCurves.length}><Scissors size={14}/>{recovering?'Add job to costing':'Make job'}</button><button className="button secondary small" onClick={async()=>{const ok=await onIgnoreElements?.(picked);if(ok!==false)clear();}} disabled={busy||!selectedCurves.length}><EyeOff size={14}/>Ignore selected</button><button className="button small preview-delete-button" onClick={remove} disabled={busy}><Trash2 size={14}/>Delete selected</button><button className="plain-button" onClick={clear}><X size={13}/>Clear</button></div><label className="check-label preview-open-choice"><input type="checkbox" checked={allowOpen} onChange={e=>setAllowOpen(e.target.checked)}/>Allow open cutting paths when making a job</label><small className="preview-choice-hint">{mode==='recover'?'The outline and holes become one job. Use Undo to restore the previous costing.':'Make job replaces overlapping detected jobs. Their unselected geometry is ignored. Holes and closed profiles are measured together. Use Undo to restore the previous result.'}</small></>}
+  {picked.length>0&&<><div className="preview-selection-actions"><button className="button primary small" onClick={create} disabled={busy||!selectedCurves.length}><Scissors size={14}/>{recovering?'Add job to costing':'Make job'}</button><button className="button secondary small" onClick={async()=>{const ok=await onIgnoreElements?.(picked);if(ok!==false)clear();}} disabled={busy||!selectedCurves.length}><EyeOff size={14}/>Ignore selected</button><button className="button small preview-delete-button" onClick={remove} disabled={busy}><Trash2 size={14}/>Delete selected</button><button className="plain-button" onClick={clear}><X size={13}/>Clear</button></div>{!pdfDrawing&&<label className="check-label preview-open-choice"><input type="checkbox" checked={allowOpen} onChange={e=>setAllowOpen(e.target.checked)}/>Allow open cutting paths when making a job</label>}<small className="preview-choice-hint">{mode==='recover'?'The outline and holes become one job. Use Undo to restore the previous costing.':'Make job replaces overlapping detected jobs. Their unselected geometry is ignored. Holes and closed profiles are measured together. Use Undo to restore the previous result.'}</small></>}
  </div>}</>;
 }

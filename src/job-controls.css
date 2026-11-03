@@ -39,6 +39,12 @@
 .jobs-table .unit-input:focus-within { outline: 2px solid #729a63; outline-offset: 1px; }
 .jobs-table .unit-input input:focus { outline: none; }
 .jobs-table td:last-child .icon-btn { width: 44px; height: 44px; }
+.job-row-actions { display: flex; gap: 3px; }
+.jobs-table .job-remove-button { color: #a42825; }
+.jobs-table .job-remove-button:hover { background: #fff1f0; }
+.jobs-table tr.excluded td { opacity: 1; color: #667a6e; background: #f6f8f4; }
+.pdf-scale-panel { padding: 12px; margin: 12px 0; border: 1px solid #ccddc3; border-radius: 8px; background: #f4f9ef; }
+.pdf-scale-panel p { margin: 6px 0; }
 
 .job-error-button {
   display: inline-grid;
@@ -89,7 +95,7 @@
   .jobs-table tbody { display: grid; gap: 10px; padding: 10px; }
   .jobs-table tr {
     display: grid;
-    grid-template-columns: 24px minmax(0,1fr) minmax(0,1fr) 44px;
+    grid-template-columns: 24px minmax(0,1fr) minmax(0,1fr) 92px;
     align-items: center;
     gap: 8px;
     padding: 10px;

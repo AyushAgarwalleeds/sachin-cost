@@ -30,7 +30,7 @@ export function preserveJobInputs(jobs,previous,defaultThickness=10,{preserveUnm
   if(!best||score<.45)return {...j,...(preserveUnmatched?{}:{thickness:defaultThickness}),reviewed:false};used.add(best.id);
   const areaMatches=j.area===null?best.area===null:best.area!==null&&Math.abs(j.area-best.area)<Math.max(.00001,Math.abs(j.area)*1e-9);
   const exact=score===1&&Math.abs(j.length-best.length)<1e-6&&j.piercings===best.piercings&&areaMatches;
-  return {...j,...Object.fromEntries(INPUTS.map(k=>[k,best[k]])),name:/^Job \d+$/.test(best.name)?j.name:best.name,...(exact?{reviewed:best.reviewed}:{reviewed:false,lengthOverride:null,piercingsOverride:null,weightOverride:null})};
+  return {...j,...Object.fromEntries(INPUTS.map(k=>[k,best[k]])),name:/^Job \d+$/.test(best.name)?j.name:best.name,...(j.pdfSource&&exact?{pdfScale:best.pdfScale}:{}),...(exact?{reviewed:best.reviewed}:{reviewed:false,lengthOverride:null,piercingsOverride:null,weightOverride:null})};
  });
 }
 export function mergeProjectHistory(previous,incoming,current){const projects=[...previous,...incoming,...current];return projects.filter((p,i)=>projects.findIndex(other=>other.id===p.id)===i).slice(0,50);}

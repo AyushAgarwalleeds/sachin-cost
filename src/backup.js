@@ -22,9 +22,9 @@ export function validateBackup(data){
     for(const key of ['setup','discount','tax'])if(!Number.isFinite(w.options[key])||w.options[key]<0)throw new Error('Invalid project charges in backup.');
     if(w.options.discount>100||w.options.tax>100)throw new Error('Invalid discount or tax in backup.');
     validateQuote(w.quote);
-    for(const f of w.files){if(!f.result||!Array.isArray(f.result.errors)||!Array.isArray(f.result.layers)||!['dwg','dxf'].includes(f.format))throw new Error('Invalid CAD source in backup.');}
+    for(const f of w.files){if(!f.result||!Array.isArray(f.result.errors)||!Array.isArray(f.result.layers)||!['dwg','dxf','pdf'].includes(f.format))throw new Error('Invalid CAD source in backup.');}
     for(const j of w.jobs){
-      if(!s.materials[j.material]||jobProblems(j,s,false).length||!Array.isArray(j.curves)||!j.curves.length||!Array.isArray(j.contours)||!j.bounds||typeof j.name!=='string')throw new Error('Invalid job data in backup.');
+      if(!s.materials[j.material]||jobProblems(j.pdfSource&&j.pdfScale==null?{...j,pdfScale:1}:j,s,false).length||!Array.isArray(j.curves)||!j.curves.length||!Array.isArray(j.contours)||!j.bounds||typeof j.name!=='string')throw new Error('Invalid job data in backup.');
       if(![j.bounds.minX,j.bounds.maxX,j.bounds.minY,j.bounds.maxY,j.length,j.piercings].every(Number.isFinite)||j.length<=0||j.piercings<0||(j.area!==null&&(!Number.isFinite(j.area)||j.area<0)))throw new Error('Invalid measurements in backup.');
       for(const c of j.curves){
         if(c.kind==='spline'){validateSpline(c);}

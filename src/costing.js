@@ -13,10 +13,13 @@ export const DEFAULT_SETTINGS = {
 export const money = n => new Intl.NumberFormat('en-IN',{style:'currency',currency:'INR',maximumFractionDigits:2}).format(Number.isFinite(n)?n:0);
 export const num = (n,d=2) => new Intl.NumberFormat('en-IN',{maximumFractionDigits:d}).format(Number.isFinite(n)?n:0);
 export const roundMoney = n => Math.round((n+Number.EPSILON)*100)/100;
+export const hasDrawingScale = job => !job.pdfSource || (Number.isFinite(job.pdfScale)&&job.pdfScale>0&&job.pdfScale<=10000);
+export const drawingScale = job => job.pdfScale??1;
 export function costJob(job,settings,withMaterial=false) {
   const material=settings.materials[job.material];
-  const length=job.lengthOverride??job.length,piercings=job.piercingsOverride??job.piercings;
-  const weight=job.weightOverride??(job.area===null?null:job.area*job.thickness*material.density/1e9);
+  const scale=drawingScale(job);
+  const length=job.lengthOverride??job.length*scale,piercings=job.piercingsOverride??job.piercings;
+  const weight=job.weightOverride??(job.area===null?null:job.area*scale**2*job.thickness*material.density/1e9);
   const pierceRate=job.thickness>=settings.pierceThreshold?settings.pierceHigh:settings.pierceLow;
   const cutting=roundMoney(length/(settings.rateUnit==='m'?1000:1)*job.thickness*material.rate);
   const piercing=roundMoney(piercings*pierceRate), materialCost=roundMoney(withMaterial?(weight??0)*job.kgRate:0);
@@ -24,7 +27,7 @@ export function costJob(job,settings,withMaterial=false) {
   return {length,piercings,weight,cutting,piercing,pierceRate,material:materialCost,unit,total:roundMoney(unit*job.quantity)};
 }
 export function estimate(jobs,settings,options={}) {
-  const included=jobs.filter(j=>j.included),rows=included.map(j=>({job:j,...costJob(j,settings,options.withMaterial)}));
+  const included=jobs.filter(j=>j.included&&hasDrawingScale(j)),rows=included.map(j=>({job:j,...costJob(j,settings,options.withMaterial)}));
   const cutting=rows.reduce((s,r)=>s+(r.cutting+r.piercing)*r.job.quantity,0),material=rows.reduce((s,r)=>s+r.material*r.job.quantity,0);
   const subtotal=roundMoney(cutting+material+(options.setup||0)),discount=roundMoney(subtotal*(options.discount||0)/100);
   const taxable=roundMoney(subtotal-discount),tax=roundMoney(taxable*(options.tax||0)/100);
@@ -32,6 +35,7 @@ export function estimate(jobs,settings,options={}) {
 }
 export function jobProblems(j,settings,withMaterial) {
   const errors=[];
+  if(!hasDrawingScale(j))errors.push('Set the PDF scale using a known part dimension.');
   if(!settings.materials[j.material])errors.push('Unknown material');
   if(!Number.isFinite(j.thickness)||j.thickness<=0)errors.push('Thickness must be positive');
   if(!Number.isSafeInteger(j.quantity)||j.quantity<1)errors.push('Quantity must be a positive whole number within the supported range');
