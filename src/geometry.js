@@ -93,6 +93,10 @@ export function mapCurve(c,m) {
 }
 const ANNOTATIONS = new Set(['TEXT','MTEXT','DIMENSION','POINT','ATTDEF','ATTRIB','SEQEND','ENDBLK','VERTEX','VIEWPORT','LEADER','MLEADER','MULTILEADER']);
 const SUPPORTED = new Set(['LINE','ARC','CIRCLE','LWPOLYLINE','POLYLINE','ELLIPSE','SPLINE','INSERT']);
+const referenceName=/\b(center|centre|dim(?:ension)?s?|text|annotation|construction|defpoints|border|title|titleblock|format|sheet|bend(?:ing)?|fold|reference|phantom|hidden)(?:\d+)?\b/i;
+export const isReferenceCurve=c=>referenceName.test([c.layer,c.lineType,c.blockName].join(' ').replaceAll('_',' '));
+const duplicatePriority=c=>c.cutIntent==='cut'?3:c.cutIntent==='ignore'?0:isReferenceCurve(c)?1:2;
+
 export function parseDxf(text, options = {}) {
   if(text.startsWith('AutoCAD Binary DXF')) throw new Error('Binary DXF is not supported. Save as ASCII DXF in your CAD software.');
   if(!text.includes('EOF')) throw new Error('Incomplete DXF: missing EOF marker. Please export the drawing again.');
@@ -100,9 +104,13 @@ export function parseDxf(text, options = {}) {
   const doc = parser.parseSync(text);
   // dxf-parser intentionally discards unknown entities. Inventory raw group codes too.
   const lines=text.replace(/^\uFEFF/,'').split(/\r\n|\r|\n/), raw=[];
-  let section='',waitingSection=false,block=null,current=null;
+  const layerLineTypes=new Map();
+  let section='',waitingSection=false,block=null,current=null,layerName=null;
   for(let i=0;i+1<lines.length;i+=2) {
     const code=lines[i].trim(),value=lines[i+1].trim();
+    if(code==='0')layerName=section==='TABLES'&&value==='LAYER'?'':null;
+    if(layerName!==null&&code==='2')layerName=value;
+    if(layerName&&code==='6')layerLineTypes.set(layerName.toUpperCase(),value);
     if(code==='0'&&value==='SECTION'){waitingSection=true;current=null;continue;}
     if(waitingSection&&code==='2'){section=value;waitingSection=false;continue;}
     if(code==='0'&&value==='ENDSEC'){section='';block=null;current=null;continue;}
@@ -129,7 +137,7 @@ export function parseDxf(text, options = {}) {
   attachWeights(doc.entities,'ENTITIES');for(const [name,b]of Object.entries(doc.blocks||{}))attachWeights(b.entities,name);
   const unknown=active.filter(e=>!SUPPORTED.has(e.type)&&!ANNOTATIONS.has(e.type));
   const rawErrors=active.filter(e=>SUPPORTED.has(e.type)&&(e.nonZeroZ||(e['210']??0)!==0||(e['220']??0)!==0||(e['230']??1)!==1)).map(e=>`Non-XY or inverted ${e.type} on layer “${e.layer}”. Flatten drawing to XY / Z=0 in CAD.`);
-  return normalizeDrawing(doc,{...options,unknown,rawErrors});
+  return normalizeDrawing(doc,{...options,unknown,rawErrors,layerLineTypes});
 }
 export function normalizeDrawing(doc, options = {}) {
   const detectedUnit=INS_UNITS[doc.header?.$INSUNITS]||null;
@@ -141,11 +149,14 @@ export function normalizeDrawing(doc, options = {}) {
   for(const error of options.rawErrors||[])addError(error);
   let annotationCount=options.annotationCount||0;
   for(const e of options.unknown||[]) addError(`Unsupported ${e.type} on layer “${e.layer}”. Convert it to supported curves or exclude that layer.`);
-  function visit(entities,m=IDENTITY,depth=0,inherited='0') {
+  function visit(entities,m=IDENTITY,depth=0,inherited='0',blockLineType) {
     if(depth>16){addError('Nested blocks exceed the safe limit. Explode blocks in CAD.');return;}
     for(const e of entities||[]) {
       const sourceId=`${e.handle||e.type}-${instance++}`;
       const layer=e.layer==='0'?inherited:(e.layer||inherited); layers.add(layer);
+      const entityLineType=e.lineType||e.lineTypeName||'BYLAYER';
+      const lineType=/^BYBLOCK$/i.test(entityLineType)?blockLineType:
+        /^BYLAYER$/i.test(entityLineType)?options.layerLineTypes?.get(layer.toUpperCase()):entityLineType;
       if(ignored.has(layer)||e.inPaperSpace||e.paperSpace||e.isInPaperSpace) continue;
       if(ANNOTATIONS.has(e.type)){if(!options.annotationCount)annotationCount++;const position=e.position||e.startPoint||e.anchorPoint;if(position&&[position.x,position.y].every(Number.isFinite)){const at=transform(transform(position,m),[factor,0,0,factor,0,0]);annotations.push({id:sourceId,type:e.type,layer,text:String(e.text||e.string||'').slice(0,500),position:at,height:Math.abs((e.textHeight||e.height||2.5)*factor*Math.hypot(m[0],m[1]))});}continue;}
       if(e.extrusionDirection && (Math.abs(e.extrusionDirection.x||0)>1e-9||Math.abs(e.extrusionDirection.y||0)>1e-9||(e.extrusionDirection.z??1)!==1)) {addError(`Non-planar or inverted ${e.type} on “${layer}”. Flatten to XY in CAD.`);continue;}
@@ -185,14 +196,14 @@ export function normalizeDrawing(doc, options = {}) {
         for(let r=0;r<rows;r++)for(let col=0;col<cols;col++) {
           const dx=col*(e.columnSpacing||0),dy=r*(e.rowSpacing||0);
           const bm=[c*sx,s*sx,-s*sy,c*sy,pos.x+c*dx-s*dy-c*sx*base.x+s*sy*base.y,pos.y+s*dx+c*dy-s*sx*base.x-c*sy*base.y];
-          visit(block.entities,compose(m,bm),depth+1,layer);
+          visit(block.entities,compose(m,bm),depth+1,layer,lineType);
         }
       } else {addError(`Unsupported ${e.type} on layer “${layer}”. Convert it to lines/arcs in CAD or exclude the layer.`);continue;}
       for(const [index,curve] of local.entries()){
         const coords=curve.kind==='line'?[curve.a,curve.b]:curve.kind==='spline'?curve.controlPoints:[curve.c];
         if(coords.some(v=>!v||![v.x,v.y].every(Number.isFinite)||Math.abs(v.z||0)>1e-6)){addError(`Invalid / non-XY coordinates on “${layer}”. Flatten drawing to Z=0.`);continue;}
         const mapped=mapCurve(curve,m);
-        const scaled={...mapCurve(mapped,[factor,0,0,factor,0,0]),id:`${sourceId}:${index}`,sourceId,sourceType:e.type,lineType:e.lineType||e.lineTypeName,blockName:e.blockName};
+        const scaled={...mapCurve(mapped,[factor,0,0,factor,0,0]),id:`${sourceId}:${index}`,sourceId,sourceType:e.type,lineType,blockName:e.blockName};
         if(curveLength(scaled)>1e-9) curves.push(scaled);
         if(curves.length>20000) throw new Error('Drawing exceeds 20,000 cut curves. Split it into smaller files.');
       }
@@ -207,12 +218,18 @@ export function analyzeCurves(curves, options={}){
   const importErrors=[...errors];
   const addError=x=>{if(!errors.includes(x))errors.push(x);};
   const annotationCount=options.annotationCount||0;
-  let duplicates=0; const unique=[],keys=new Set();
+  let duplicates=0; const unique=[],keys=new Map();
   for(const c of curves) {
     const round=v=>`${Math.round(v.x*1e7)},${Math.round(v.y*1e7)}`;
     const pts=[round(curvePoint(c,0)),round(curvePoint(c,.5)),round(curvePoint(c,1))];
     const key=c.kind==='spline'?JSON.stringify([c.controlPoints,c.knots,c.weights]):c.kind==='circle'?`circle:${round(c.c)}:${Math.round(c.r*1e7)}`:[pts.join(';'),pts.reverse().join(';')].sort()[0]+`:${Math.round(curveLength(c)*1e7)}`;
-    if(keys.has(key)){duplicates++;continue;}keys.add(key);unique.push(c);
+    if(keys.has(key)){
+      duplicates++;
+      const index=keys.get(key);
+      if(duplicatePriority(c)>duplicatePriority(unique[index]))unique[index]=c;
+      continue;
+    }
+    keys.set(key,unique.length);unique.push(c);
   }
   if(duplicates) issues.push(`${duplicates} exact duplicate curve${duplicates===1?'':'s'} removed to avoid double charging.`);
   if(annotationCount) issues.push(`${annotationCount} annotation entities ignored (text, dimensions and points).`);

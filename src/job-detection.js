@@ -1,16 +1,17 @@
-import {analyzeCurves,buildContours,boundsOf,sampleCurve,curvePoint,curveArea,curveLength,reverseCurve,dist,TAU} from './geometry.js';
+import {analyzeCurves,buildContours,boundsOf,sampleCurve,curvePoint,curveArea,curveLength,reverseCurve,dist,TAU,isReferenceCurve,pointInPolygon} from './geometry.js';
 import {nodeEndpointJunctions} from './junctions.js';
 import {makeManualJob} from './manual-jobs.js';
 
-export const ANALYSIS_VERSION=5;
+export const ANALYSIS_VERSION=6;
 const contains=(a,b,t=1e-5)=>a.minX<=b.minX+t&&a.maxX>=b.maxX-t&&a.minY<=b.minY+t&&a.maxY>=b.maxY-t;
 const box=cs=>boundsOf(cs.flatMap(c=>sampleCurve(c,.05)));
 const pad=(b,d)=>({...b,minX:b.minX-d,minY:b.minY-d,maxX:b.maxX+d,maxY:b.maxY+d});
 const gap=(a,b)=>Math.hypot(Math.max(0,a.minX-b.maxX,b.minX-a.maxX),Math.max(0,a.minY-b.maxY,b.minY-a.maxY));
 function groupBy(items,key){const map=new Map();for(const item of items){const k=key(item);if(!map.has(k))map.set(k,[]);map.get(k).push(item);}return map;}
-const nonCut=/\b(center|centre|dim(?:ension)?s?|text|annotation|construction|defpoints|border|title|titleblock|format|sheet|bend(?:ing)?|fold|reference|phantom|hidden)\b/i;
 const forceCut=c=>c.cutIntent==='cut';
 const rectangle=c=>c.closed&&c.curves.every(e=>e.kind==='line'&&(Math.abs(e.a.x-e.b.x)<1e-6||Math.abs(e.a.y-e.b.y)<1e-6))&&Math.abs(c.area-c.bounds.width*c.bounds.height)<Math.max(1e-6,c.area*1e-8);
+const encloses=(parent,child)=>contains(parent.bounds,child.bounds)&&
+  (rectangle(parent)||child.points.every(p=>pointInPolygon(p,parent.points)));
 function signedArea(cs){const o=curvePoint(cs[0],0);return cs.reduce((s,c)=>s+curveArea(c.kind==='line'?{...c,a:{x:c.a.x-o.x,y:c.a.y-o.y},b:{x:c.b.x-o.x,y:c.b.y-o.y}}:c.kind==='spline'?{...c,controlPoints:c.controlPoints.map(v=>({x:v.x-o.x,y:v.y-o.y}))}:{...c,c:{x:c.c.x-o.x,y:c.c.y-o.y}}),0);}
 function graphBridges(nodes,edges){
  const entered=Array(nodes.length).fill(-1),low=Array(nodes.length).fill(0),bridges=new Set();let clock=0;
@@ -75,6 +76,19 @@ function outlineText(curves,groups){
  return groups.filter(g=>clusters.some(c=>contains(c.bounds,g.bounds)&&g.bounds.height<c.height*3)).map(g=>({...g,reason:'Outline lettering / drawing label'}));
 }
 
+function hasTitleGrid(frame,annotations,dividers){
+ const {minX,maxX,minY,maxY,width,height}=frame.bounds;
+ const inEdgeBand=[
+  p=>p.x<=minX+width*.25,p=>p.x>=maxX-width*.25,
+  p=>p.y<=minY+height*.25,p=>p.y>=maxY-height*.25
+ ];
+ return inEdgeBand.some(inBand=>{
+  if(annotations.filter(a=>inBand(a.position)).length<3)return false;
+  const lines=dividers.filter(c=>contains(frame.bounds,box([c]))&&inBand(c.a)&&inBand(c.b));
+  return lines.some(c=>Math.abs(c.a.x-c.b.x)<1e-6)&&lines.some(c=>Math.abs(c.a.y-c.b.y)<1e-6);
+ });
+}
+
 export function prepareDrawing(input,options={}){
  const tolerance=options.tolerance??.01,ignored=new Map();let source=(input.curves||[]).map(c=>c.id?c:{...c,id:crypto.randomUUID()});
  const manualSource=source.filter(c=>c.manualJobId&&c.cutIntent!=='ignore');
@@ -89,24 +103,46 @@ export function prepareDrawing(input,options={}){
   const normalized=new Map(automatic.curves.map(c=>[c.id,c]));
   return {...automatic,curves:source.filter(c=>manualIds.has(c.id)).concat([...normalized.values()]),cutCurves:[...automatic.cutCurves,...manualSource],jobs:jobs.map((j,i)=>({...j,name:'Job '+String(i+1).padStart(2,'0')})),errors,manualErrors};
  }
- const allGroups=drawingGroups(source,tolerance),text=outlineText(source,allGroups);
  const ignore=(c,reason)=>{if(!forceCut(c))ignored.set(c.id,reason);};
- for(const c of source){if(c.cutIntent==='ignore')ignored.set(c.id,'Marked as non-cutting');else if(!forceCut(c)&&nonCut.test(String(c.layer||'').replaceAll('_',' ')+' '+String(c.lineType||'').replaceAll('_',' ')+' '+(c.blockName||'')))ignore(c,'Reference / annotation layer or line type');}
+ for(const c of source){
+  if(c.cutIntent==='ignore')ignored.set(c.id,'Marked as non-cutting');
+  else if(isReferenceCurve(c))ignore(c,'Reference / annotation layer or line type');
+ }
+ const unclassified=source.filter(c=>!ignored.has(c.id));
+ const allGroups=drawingGroups(unclassified,tolerance),text=outlineText(unclassified,allGroups);
  for(const g of text)for(const c of g.curves)ignore(c,g.reason);
  const junctions=nodeEndpointJunctions(source.filter(c=>!ignored.has(c.id)),tolerance);
  source=source.flatMap(c=>junctions.replacements?.get(c.id)||[c]);
  const remaining=()=>source.filter(c=>!ignored.has(c.id));
- const availableBeforeFrames=remaining(),originalComponents=buildContours(availableBeforeFrames,tolerance).contours,initial=buildContours(profileBoundary(availableBeforeFrames,tolerance).curves,tolerance).contours,rects=initial.filter(rectangle),frameCandidates=[];
+ const availableBeforeFrames=remaining(),originalComponents=buildContours(availableBeforeFrames,tolerance).contours;
+ const initialBoundary=profileBoundary(availableBeforeFrames,tolerance);
+ const initial=buildContours(initialBoundary.curves,tolerance).contours,rects=initial.filter(rectangle),frameCandidates=[];
+ const dividers=availableBeforeFrames.filter(c=>c.kind==='line'&&initialBoundary.shared.has(c.id));
  const nestedChildren=new Map(),ordered=initial.filter(c=>c.closed).sort((a,b)=>a.area-b.area);
- for(let i=0;i<ordered.length;i++)for(let j=i+1;j<ordered.length;j++){const child=ordered[i],parent=ordered[j];if(parent.area>child.area&&contains(parent.bounds,child.bounds)){if(!nestedChildren.has(parent))nestedChildren.set(parent,[]);nestedChildren.get(parent).push(child);break;}}
- const eraseFrame=(r,reason)=>{for(const component of originalComponents)if(component.curves.some(c=>r.curves.some(e=>e.id===c.id))&&component.curves.every(c=>c.kind==='line'))component.curves.forEach(c=>ignore(c,reason));};
+ for(let i=0;i<ordered.length;i++)for(let j=i+1;j<ordered.length;j++){
+  const child=ordered[i],parent=ordered[j];
+  if(parent.area>child.area&&encloses(parent,child)){
+   if(!nestedChildren.has(parent))nestedChildren.set(parent,[]);
+   nestedChildren.get(parent).push(child);
+   break;
+  }
+ }
+ const eraseFrame=(frame,reason)=>{
+  const ids=new Set(frame.curves.map(c=>c.id));
+  frame.curves.forEach(c=>ignore(c,reason));
+  for(const component of originalComponents){
+   if(contains(frame.bounds,component.bounds)&&component.curves.every(c=>c.kind==='line'&&!forceCut(c))&&
+      component.curves.some(c=>ids.has(c.id)))component.curves.forEach(c=>ignore(c,reason));
+  }
+ };
  for(const r of rects){
   if(r.curves.some(forceCut))continue;
   const glyphs=text.filter(g=>contains(r.bounds,g.bounds)),inside=initial.filter(c=>c!==r&&c.closed&&contains(r.bounds,c.bounds));
   const native=(input.annotations||[]).filter(a=>a.text&&contains(r.bounds,{minX:a.position.x,maxX:a.position.x,minY:a.position.y,maxY:a.position.y}));
   const children=nestedChildren.get(r)||[],profiled=children.filter(c=>c.curves.some(e=>!['circle','ellipse'].includes(e.kind))),detailed=profiled.filter(c=>(nestedChildren.get(c)||[]).length);
   const framed=profiled.length>=2&&(detailed.length>=2||detailed.length>=1&&native.length>=1);
-  if(framed)eraseFrame(r,'Sheet frame surrounding separate detailed parts');
+  if(inside.length&&hasTitleGrid(r,native,dividers))eraseFrame(r,'Drawing sheet border / title grid');
+  else if(framed)eraseFrame(r,'Sheet frame surrounding separate detailed parts');
   else if(profiled.length&&r.curves.every(c=>!forceCut(c)))frameCandidates.push({ids:r.curves.map(c=>c.id),bounds:r.bounds,reason:'Possible sheet frame around internal profiles. Ignore it if it is drawing formatting.'});
   if(native.length>=12&&inside.filter(c=>!rectangle(c)&&c.curves.some(e=>e.kind!=='circle')).length>=2)eraseFrame(r,'Drawing sheet border / title grid');
   if(glyphs.length>=5&&!inside.some(c=>!rectangle(c)&&c.area>r.area*.02)){r.curves.forEach(c=>ignore(c,'Label box around outline text'));for(const g of allGroups)if(contains(r.bounds,g.bounds))g.curves.forEach(c=>ignore(c,'Outline lettering / drawing label'));}
@@ -115,18 +151,32 @@ export function prepareDrawing(input,options={}){
   const a=rects[i],b=rects[j],outer=a.area>b.area?a:b,inner=a.area>b.area?b:a;
   if(!contains(outer.bounds,inner.bounds)||outer.curves.some(forceCut)||inner.curves.some(forceCut))continue;
   const margins=[inner.bounds.minX-outer.bounds.minX,inner.bounds.minY-outer.bounds.minY,outer.bounds.maxX-inner.bounds.maxX,outer.bounds.maxY-inner.bounds.maxY],min=Math.min(...margins),max=Math.max(...margins);
-  const annotationInside=(input.annotations||[]).some(a=>a.text&&contains(inner.bounds,{minX:a.position.x,maxX:a.position.x,minY:a.position.y,maxY:a.position.y}));
-  if(min>tolerance&&max/min<1.05&&max<Math.min(outer.bounds.width,outer.bounds.height)*.08&&(text.some(g=>contains(inner.bounds,g.bounds))||annotationInside)){eraseFrame(outer,'Double sheet border / drawing panel');eraseFrame(inner,'Double sheet border / drawing panel');}
+  const tightMargins=min>tolerance&&max/min<1.05&&max<Math.min(outer.bounds.width,outer.bounds.height)*.08;
+  if(!tightMargins)continue;
+  const labels=(input.annotations||[]).filter(a=>a.text&&contains(inner.bounds,{minX:a.position.x,maxX:a.position.x,minY:a.position.y,maxY:a.position.y}));
+  if(text.some(g=>contains(inner.bounds,g.bounds))||labels.length>=3){
+   eraseFrame(outer,'Double sheet border / drawing panel');
+   eraseFrame(inner,'Double sheet border / drawing panel');
+  }
  }
- const available=remaining(),boundary=profileBoundary(available,tolerance),boundaryIds=new Set(boundary.curves.map(c=>c.id)),open=buildContours(available.filter(c=>!boundaryIds.has(c.id)&&!forceCut(c)),tolerance).contours,unresolved=[];
+ const available=remaining(),boundary=profileBoundary(available,tolerance),boundaryIds=new Set(boundary.curves.map(c=>c.id));
+ // A self-crossing closed wire can have zero signed area. Pass it to topology
+ // validation instead of treating it as discarded open reference geometry.
+ for(const contour of originalComponents){
+  if(contour.closed&&contour.curves.every(c=>!ignored.has(c.id)))for(const curve of contour.curves)boundaryIds.add(curve.id);
+ }
+ const closed=buildContours(available.filter(c=>boundaryIds.has(c.id)),tolerance).contours.filter(c=>c.closed);
+ const open=buildContours(available.filter(c=>!boundaryIds.has(c.id)&&!forceCut(c)),tolerance).contours,unresolved=[];
  for(const c of open){
   const isOutline=!c.branched&&c.curves.length>=3&&c.bounds.width>tolerance*10&&c.bounds.height>tolerance*10&&c.curves.some(v=>v.kind!=='line'||!boundary.shared.has(v.id));
-  const within=boundary.curves.length&&buildContours(boundary.curves,tolerance).contours.some(b=>b.closed&&contains(b.bounds,c.bounds));
+  const within=closed.some(profile=>encloses(profile,c));
   if(isOutline&&!within)unresolved.push(c);
  }
  for(const c of available)if(!boundaryIds.has(c.id)&&!forceCut(c))ignore(c,unresolved.some(p=>p.curves.some(v=>v.id===c.id))?'Unclosed profile — repair or explicitly include':'Open reference / centre / bend line');
  // Holes inside an unfinished outline must not become independently priced jobs.
- for(const c of boundary.curves)if(!forceCut(c)&&unresolved.some(p=>contains(p.bounds,box([c]))))ignore(c,'Inside an unclosed profile — inspect the outside boundary');
+ for(const contour of closed){
+  if(unresolved.some(profile=>encloses(profile,contour)))for(const curve of contour.curves)ignore(curve,'Inside an unclosed profile — inspect the outside boundary');
+ }
  const editedBroken=[...groupBy(source.filter(c=>c.repairProfileId&&c.cutIntent!=='ignore'),c=>c.repairProfileId).values()].filter(cs=>cs.some(c=>!boundaryIds.has(c.id)&&!forceCut(c)));
  for(const cs of editedBroken)for(const c of cs)ignore(c,'Unclosed profile after editing — repair or explicitly include');
  const cut=source.filter(c=>!ignored.has(c.id)&&(boundaryIds.has(c.id)||forceCut(c))),persistent=(input.importErrors||[]).filter(e=>!/^Unsupported (VIEWPORT|LEADER|MLEADER|MULTILEADER|TEXT|MTEXT|DIMENSION|POINT)\b/.test(e)&&!/^\d+ unclosed profiles? (?:needs?|need) repair/.test(e));

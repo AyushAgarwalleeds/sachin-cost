@@ -8,6 +8,76 @@ import {costJob,DEFAULT_SETTINGS} from '../src/costing.js';
 const rectangle=(x,y,w,h)=>rectangleCurves({x,y},{x:x+w,y:y+h},'0');
 const circle=(x,y,r)=>identify({kind:'circle',c:{x,y},r,start:0,sweep:TAU,layer:'0'});
 const analyze=curves=>prepareDrawing(analyzeCurves(curves,{skipTopology:true}));
+const wire=points=>points.slice(1).map(([x,y],i)=>identify({
+ kind:'line',a:{x:points[i][0],y:points[i][1]},b:{x,y},layer:'0'
+}));
+
+test('coincident reference geometry cannot hide a cutting outline',()=>{
+ const cutting=rectangle(0,0,100,50);
+ const references=cutting.map(c=>({...c,id:crypto.randomUUID(),layer:'FORMAT'}));
+ const result=prepareDrawing(parseDxf(exportDxf({curves:[...references,...cutting]}),{skipTopology:true}));
+ assert.equal(result.duplicates,4);
+ assert.equal(result.jobs.length,1);
+ assert.equal(result.jobs[0].length,300);
+ assert.deepEqual(result.errors,[]);
+});
+
+test('a reference line type inherited from a neutral DXF layer excludes its closed outline',()=>{
+ const curves=[...rectangle(0,0,100,50),...rectangle(200,0,120,80).map(c=>({...c,layer:'AUX'}))];
+ const table=['0','SECTION','2','TABLES','0','TABLE','2','LAYER','70','1',
+  '0','LAYER','2','AUX','70','0','62','7','6','CENTER2','0','ENDTAB','0','ENDSEC'].join('\n')+'\n';
+ const raw=exportDxf({curves}).replace('0\nSECTION\n2\nENTITIES\n',table+'0\nSECTION\n2\nENTITIES\n');
+ const result=prepareDrawing(parseDxf(raw,{skipTopology:true}));
+ assert.equal(result.jobs.length,1);
+ assert.equal(result.ignoredCurves.length,4);
+ assert.deepEqual(result.errors,[]);
+});
+
+test('an incomplete outline in the notch of a concave part is still flagged',()=>{
+ const outside=wire([[0,0],[100,0],[100,40],[40,40],[40,100],[0,100],[0,0]]);
+ const incomplete=wire([[60,65],[60,95],[95,95],[95,65]]);
+ const result=analyze([...outside,...incomplete,circle(75,80,5)]);
+ assert.equal(result.unresolvedProfiles,1);
+ assert.equal(result.jobs.length,1);
+ assert.equal(result.jobs[0].piercings,1);
+});
+
+test('a closed part in the empty notch of an incomplete outline remains visible',()=>{
+ const incomplete=wire([[0,1],[0,100],[40,100],[40,40],[100,40],[100,0],[0,0]]);
+ const result=analyze([...incomplete,circle(75,80,5)]);
+ assert.equal(result.unresolvedProfiles,1);
+ assert.equal(result.jobs.length,1);
+ assert.ok(result.errors.some(error=>error.includes('unclosed')));
+});
+
+test('a closed self-crossing wire reports a topology error',()=>{
+ const result=analyze(wire([[0,0],[100,50],[0,50],[100,0],[0,0]]));
+ assert.equal(result.unresolvedProfiles,0);
+ assert.ok(result.errors.some(error=>error.includes('Intersecting')));
+});
+
+test('a rectangular gasket with a part number remains a job',()=>{
+ const curves=[...rectangle(0,0,200,100),...rectangle(5,5,190,90)];
+ const result=prepareDrawing({...analyzeCurves(curves,{skipTopology:true}),
+  annotations:[{text:'Gasket 01',position:{x:100,y:50}}]});
+ assert.equal(result.jobs.length,1);
+ assert.equal(result.jobs[0].piercings,2);
+ assert.equal(result.jobs[0].area,2900);
+});
+
+test('an attached title grid identifies a sheet containing just one part',()=>{
+ const border=wire([[0,0],[140,0],[220,0],[300,0],[300,20],[300,40],[300,180],[0,180],[0,0]]);
+ const grid=[...wire([[140,0],[140,20],[140,40],[220,40],[300,40]]),
+  ...wire([[220,0],[220,20],[220,40]]),...wire([[140,20],[220,20],[300,20]])];
+ const part=circle(120,110,25);
+ const annotations=[{x:155,y:10},{x:230,y:10},{x:155,y:30}].map(position=>({text:'Title field',position}));
+ const result=prepareDrawing({...analyzeCurves([...border,...grid,part],{skipTopology:true}),annotations});
+ assert.equal(result.jobs.length,1);
+ assert.equal(result.jobs[0].piercings,1);
+ assert.ok(Math.abs(result.jobs[0].length-50*Math.PI)<1e-8);
+ assert.equal(result.ignoredCurves.length,border.length+grid.length);
+ assert.deepEqual(result.errors,[]);
+});
 test('stray lines are excluded before pricing and topology checks',()=>{const r=analyze([...rectangle(0,0,100,50),circle(50,25,5),identify({kind:'line',a:{x:-10,y:25},b:{x:110,y:25},layer:'0'})]);assert.equal(r.jobs.length,1);assert.equal(r.jobs[0].piercings,2);assert.equal(r.ignoredCurves.length,1);assert.deepEqual(r.errors,[]);});
 test('inside bend chord is excluded while the closed outside boundary survives',()=>{const curves=[...rectangle(0,0,100,50),identify({kind:'line',a:{x:0,y:0},b:{x:100,y:50},layer:'0'})],r=analyze(curves);assert.equal(r.jobs.length,1);assert.equal(r.cutCurves.length,4);assert.equal(r.ignoredCurves.length,1);assert.deepEqual(r.errors,[]);assert.ok(r.detectionNotes.length);});
 test('an explicitly included open cut remains costable',()=>{const c=identify({kind:'line',a:{x:0,y:0},b:{x:100,y:0},layer:'0',cutIntent:'cut'}),r=analyze([c]);assert.equal(r.jobs.length,1);assert.equal(r.jobs[0].open,true);assert.equal(r.ignoredCurves.length,0);});
