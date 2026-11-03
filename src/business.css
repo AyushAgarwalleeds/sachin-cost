@@ -1,0 +1,47 @@
+.business-page{max-width:1240px;margin:0 auto;color:#294638}
+.business-page h1{margin:0 0 8px;font-size:clamp(24px,4vw,36px)}
+.business-page h2{font-size:17px;margin:0 0 10px}
+.business-page p,.business-page summary{line-height:1.55}
+.business-card{background:#fff;border:1px solid #dbe6db;border-radius:12px;margin:14px 0;padding:16px}
+.business-card fieldset{margin:12px 0;padding:10px;border:1px solid #dbe6db;border-radius:8px;min-width:0}
+.business-bar,.business-metrics{display:flex;align-items:center;flex-wrap:wrap;gap:10px;margin:12px 0}
+.business-bar h2{margin-right:auto;margin-bottom:0}
+.business-page button,.billing-overlay button{padding:8px 12px;border:1px solid #aac6b0;border-radius:7px;background:#edf5ec;color:#244a34;cursor:pointer}
+.business-page button:hover,.billing-overlay button:hover{background:#dcebdd}
+.business-page button[aria-pressed=true],.business-page form>button:not([type=button]){background:#285c40;color:white}
+.business-page button:disabled{opacity:.5;cursor:default}
+.business-page button+button{margin-left:4px}
+.business-page label{display:grid;gap:4px;font-size:12px;font-weight:600}
+.business-page label:has(input[type=checkbox]){display:flex;align-items:center;gap:6px}
+.business-page input:not([type=checkbox]),.business-page select,.business-page textarea{font:inherit;font-size:14px;min-width:0;padding:8px 9px;border:1px solid #bfcebf;border-radius:6px;color:#183b2a;background:#fff}
+.business-page textarea{resize:vertical}
+.business-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,155px),1fr));gap:10px;margin:12px 0}
+.business-grid>button{align-self:end}
+.business-metrics span{display:grid;gap:4px;background:#edf6ee;border-radius:7px;padding:9px 12px;font-size:12px}
+.business-metrics b{font-size:15px}
+.business-error,.business-page [role=alert]{color:#9d2323}
+.business-table{max-width:100%;overflow:auto;margin:12px 0}
+.business-table table,.billing-print table{border-collapse:collapse;width:100%;text-align:left}
+.business-table th,.business-table td{padding:8px;border-bottom:1px solid #dbe6db;white-space:nowrap}
+.billing-overlay{position:fixed;inset:0;z-index:1000;background:#eef2ee;overflow:auto;padding:16px}
+.billing-overlay>.business-bar,.billing-print{max-width:850px;margin:0 auto 12px}
+.billing-print{background:white;color:#18291f;padding:clamp(14px,4vw,40px);font:14px/1.45 Arial,sans-serif;overflow-wrap:anywhere}
+.billing-print header{display:flex;gap:24px;justify-content:space-between;border-bottom:2px solid #264c35;padding-bottom:12px}
+.billing-print h1,.billing-print h2,.billing-print p{margin:0 0 5px}
+.billing-print p{white-space:pre-wrap}
+.billing-recipient{padding:14px 0}
+.billing-print th,.billing-print td{border-bottom:1px solid #b8c9bc;padding:7px 4px;vertical-align:top}
+.billing-print th{background:#edf4ed}
+.billing-print dl{display:grid;grid-template-columns:1fr auto;gap:6px 16px;margin:16px 0 16px auto;max-width:340px}
+.billing-print dd{margin:0;text-align:right}
+.billing-print footer{margin:35px 0 0;text-align:right}
+@media print{
+  @page{size:A4;margin:14mm}
+  body:has(>.billing-overlay)>:not(.billing-overlay){display:none!important}
+  body:has(>.billing-overlay){height:auto!important;overflow:visible!important;background:white}
+  .billing-overlay{position:static;overflow:visible;padding:0;background:white}
+  .billing-overlay .print-hide{display:none!important}
+  .billing-print{margin:0;padding:0;max-width:none;font-size:10pt}
+  .billing-print thead{display:table-header-group}
+  .billing-print tr,.billing-print dl,.billing-print footer{break-inside:avoid}
+}

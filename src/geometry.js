@@ -346,6 +346,7 @@ export function exportDxf(job) {
       add(0,'ELLIPSE');add(8,c.layer||'0');add(100,'AcDbEntity');add(100,'AcDbEllipse');point(c.c);point(c.u,11);add(40,Math.hypot(c.v.x,c.v.y)/Math.hypot(c.u.x,c.u.y));add(41,start);add(42,end);
     }
   }
+  for(const value of job.extraEntities||[])out.push(value);
   add(0,'ENDSEC');add(0,'EOF');return out.join('\n')+'\n';
 }
 export function exportFilenames(jobs) {

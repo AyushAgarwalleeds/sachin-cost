@@ -9,6 +9,9 @@ import { demoWorkspace } from './demo.js';
 import { getSaved, putSaved, downloadBlob } from './storage.js';
 import { validateBackup } from './backup.js';
 import CadStudio from './CadStudio.jsx';
+import ManualCosting from './ManualCosting.jsx';
+import BillingCentre from './BillingCentre.jsx';
+import {dimensionEntities,resolveDimension} from './cad-dimensions.js';
 import CleanupPanel from './CleanupPanel.jsx';
 import ErrorBoundary from './ErrorBoundary.jsx';
 import {ANALYSIS_VERSION} from './job-detection.js';
@@ -114,13 +117,19 @@ export default function App(){
   function undoGeometry(){const previous=elementUndo.at(-1);if(previous){setWorkspace({...workspace,files:previous.files,jobs:preserveJobInputs(previous.jobs,workspace.jobs,settings.defaultThickness,{preserveUnmatched:true}),updatedAt:Date.now()});setElementUndo(a=>a.slice(0,-1));setSelected(null);notify('Geometry restored. Review the restored jobs.');}}
   async function openProject(p){if(busy)return;setBusy(true);try{archiveCurrent(false);setElementUndo([]);setWorkspace(await refreshWorkspace(clone(p)));setQuote(clone(p.quote||DEFAULT_QUOTE));setSelected(null);setChecked([]);setView('estimate');}finally{setBusy(false);}}
   function openCad(fromDrawing=false){
-    setCadSource(fromDrawing?{name:workspace.name,curves:workspace.files.flatMap(f=>{const ignored=new Map((f.result.ignoredCurves||[]).map(c=>[c.id,c.ignoreReason]));return f.result.curves.map(c=>ignored.has(c.id)?{...c,cutIntent:'ignore',ignoreReason:ignored.get(c.id)}:c);}),layers:[...new Set(workspace.files.flatMap(f=>f.result.layers))],importErrors:workspace.files.flatMap(f=>f.result.importErrors||[]),workspaceId:workspace.id,ignoredIds:workspace.files.flatMap(f=>(f.result.ignoredCurves||[]).map(c=>c.id)),annotations:workspace.files.flatMap(f=>f.result.annotations||[])}:null);setCadKey(k=>k+1);setView('cad');setMenu(false);
+    setCadSource(fromDrawing?{name:workspace.name,dimensions:workspace.files.flatMap(f=>f.dimensions||[]),curves:workspace.files.flatMap(f=>{const ignored=new Map((f.result.ignoredCurves||[]).map(c=>[c.id,c.ignoreReason]));return f.result.curves.map(c=>ignored.has(c.id)?{...c,cutIntent:'ignore',ignoreReason:ignored.get(c.id)}:c);}),layers:[...new Set(workspace.files.flatMap(f=>f.result.layers))],importErrors:workspace.files.flatMap(f=>f.result.importErrors||[]),workspaceId:workspace.id,ignoredIds:workspace.files.flatMap(f=>(f.result.ignoredCurves||[]).map(c=>c.id)),annotations:workspace.files.flatMap(f=>f.result.annotations||[])}:null);setCadKey(k=>k+1);setView('cad');setMenu(false);
   }
   async function useCad(data){
     setBusy(true);try{
-      const id=crypto.randomUUID(),raw=exportDxf({curves:data.curves}),analyzed=await parse(data.curves,'curves',{importErrors:data.importErrors});
+      const curveIndex=new Map(data.curves.map(c=>[c.id,c]));
+      const id=crypto.randomUUID(),raw=exportDxf({curves:data.curves,extraEntities:dimensionEntities((data.dimensions||[]).map(d=>resolveDimension(d,curveIndex)))}),analyzed=await parse(data.curves,'curves',{importErrors:data.importErrors});
       analyzed.jobs=preserveJobInputs(analyzed.jobs,data.source?.workspaceId===workspace.id?workspace.jobs:[],settings.defaultThickness);const result=tagResult(analyzed,id);
-      archiveCurrent(false);const w=EMPTY();w.name=data.name;w.files=[{id,name:data.name+'.dxf',format:'dxf',raw,result,ignoredLayers:[],edited:true}];w.jobs=result.jobs.map(j=>({...j,fileId:id,reviewed:false}));w.unitsConfirmed=true;w.isDemo=workspace.isDemo&&data.source?.workspaceId===workspace.id;
+      const dimensions=(data.dimensions||[]).map(d=>({
+        ...d,
+        radialId:d.radialId?id+'|'+d.radialId:null,
+        anchors:d.anchors?.map(anchor=>anchor?{...anchor,id:id+'|'+anchor.id}:null)
+      }));
+      archiveCurrent(false);const w=EMPTY();w.name=data.name;w.files=[{id,name:data.name+'.dxf',format:'dxf',raw,result,dimensions,ignoredLayers:[],edited:true}];w.jobs=result.jobs.map(j=>({...j,fileId:id,reviewed:false}));w.unitsConfirmed=true;w.isDemo=workspace.isDemo&&data.source?.workspaceId===workspace.id;
       setElementUndo([]);setWorkspace(w);setQuote(freshQuote());setSelected(null);setChecked([]);setView('estimate');notify('Drawing sent to costing in millimetres. Review the extracted jobs.');
     }catch(e){notify(e.message,'error');}finally{setBusy(false);}
   }
@@ -173,17 +182,19 @@ export default function App(){
       <nav aria-label="Main navigation">
         <button className={view==='estimate'?'active':''} onClick={()=>{setView('estimate');setMenu(false);}}><LayoutDashboard size={18}/>Cost calculator<span className="nav-active-dot"/></button>
         <button className={view==='cad'?'active':''} onClick={()=>openCad()}><Ruler size={18}/>2D CAD workspace</button>
+        <button className={view==='manual'?'active':''} onClick={()=>{setView('manual');setMenu(false);}}><Ruler size={18}/>Manual costing</button>
+        <button className={view==='billing'?'active':''} onClick={()=>{setView('billing');setMenu(false);}}><FileText size={18}/>Billing centre</button>
         <button className={view==='communications'?'active':''} onClick={()=>{setView('communications');setMenu(false);}}><MessageCircle size={18}/>Communication centre</button>
         <button className={view==='history'?'active':''} onClick={()=>{setView('history');setMenu(false);}}><FolderClock size={18}/>Saved projects<span className="count-pill">{saved.length}</span></button>
         <button className={view==='settings'?'active':''} onClick={()=>{setView('settings');setMenu(false);}}><Settings2 size={18}/>Rates & settings</button>
       </nav>
       <div className="sidebar-bottom"><div className="local-note"><ShieldCheck size={19}/><b>Your drawings stay yours.</b><p>Files are processed and saved on this device.</p><span><i/>{online?'Local-first workspace':'Working offline'}</span></div>
         <button className="sidebar-help" onClick={()=>setModal('help')}><HelpCircle size={17}/>Quick guide<ArrowUpRight size={15}/></button>
-        <div className="profile"><span>SI</span><div><b>Factory workspace</b><small>Factory use · v2.3</small></div><button className="icon-btn" title="Install app" onClick={installApp}><Download size={17}/></button></div>
+        <div className="profile"><span>SI</span><div><b>Factory workspace</b><small>Factory use · v2.4</small></div><button className="icon-btn" title="Install app" onClick={installApp}><Download size={17}/></button></div>
       </div>
     </aside>
     <div className="main-shell">
-      <header className="topbar"><div className="breadcrumb"><button className="icon-btn mobile-menu" onClick={()=>setMenu(!menu)} aria-label="Menu"><Menu size={20}/></button><span>Workspace</span><ChevronRight size={14}/><b>{({estimate:'Cost calculator',history:'Saved projects',settings:'Rates & settings',cad:'2D CAD workspace',communications:'Communication centre'})[view]}</b></div><div className="topbar-right"><span className={`save-state ${storageStatus.includes('failed')?'bad':''}`}><i/>{storageStatus}</span><button className="plain-button install-button" onClick={installApp}><Download size={15}/>Install app</button><span className="top-avatar">SI</span></div></header>
+      <header className="topbar"><div className="breadcrumb"><button className="icon-btn mobile-menu" onClick={()=>setMenu(!menu)} aria-label="Menu"><Menu size={20}/></button><span>Workspace</span><ChevronRight size={14}/><b>{({estimate:'Cost calculator',history:'Saved projects',settings:'Rates & settings',cad:'2D CAD workspace',communications:'Communication centre',manual:'Manual costing',billing:'Billing centre'})[view]}</b></div><div className="topbar-right"><span className={`save-state ${storageStatus.includes('failed')?'bad':''}`}><i/>{storageStatus}</span><button className="plain-button install-button" onClick={installApp}><Download size={15}/>Install app</button><span className="top-avatar">SI</span></div></header>
       <main>
         {view==='estimate'&&<>
           <div className="page-heading"><div><div className="eyebrow">LESS GUESSWORK. MORE PRECISION.</div><h1>Laser cutting calculator<span className="heading-dot">.</span></h1><p>From drawing to quotation, in one clear workspace.</p></div><button className="button secondary" onClick={newEstimate}><Plus size={17}/>New estimate</button></div>
@@ -242,6 +253,8 @@ export default function App(){
         </>}
         {view==='history'&&<><div className="page-heading"><div><div className="eyebrow">PICK UP WHERE YOU LEFT OFF</div><h1>Saved projects<span className="heading-dot">.</span></h1><p>Stored on this device. Back up your projects to move them to another.</p></div><button className="button secondary" onClick={portableBackup}><Download size={16}/>Back up all</button></div><div className="history-grid">{saved.map(p=><article className="card history-card" key={p.id}><div className="history-preview"><CadPreview jobs={p.jobs} compact/></div><h2>{p.name}</h2><p>{p.jobs.length} jobs · {new Date(p.updatedAt).toLocaleDateString('en-IN')}</p><div><button className="button primary small" onClick={()=>openProject(p)}>Open project<ArrowUpRight size={14}/></button><button className="icon-btn" title="Remove from saved history" onClick={()=>{setSaved(a=>a.filter(x=>x.id!==p.id));notify('Removed from saved history.');}}><Trash2 size={16}/></button></div></article>)}</div>{!saved.length&&<div className="card empty-history"><FolderClock size={38}/><h2>Your next estimate starts here.</h2><p>Save the current project or create a new estimate. Previous estimates appear here.</p><button className="button primary" onClick={()=>setView('estimate')}>Go to calculator</button></div>}</>}
         {view==='cad'&&<CadStudio key={cadKey} source={cadSource} onApply={useCad} onCancel={()=>setView('estimate')} notify={notify} parseDrawing={async f=>{if(f.size>30*1024*1024)throw new Error('Drawing exceeds 30 MB.');const ext=f.name.split('.').pop().toLowerCase();if(!['dxf','dwg'].includes(ext))throw new Error('Choose a DXF or DWG.');return parse(ext==='dwg'?await f.arrayBuffer():await f.text(),ext);}}/>}
+        {view==='manual'&&<ManualCosting settings={settings}/>}
+        {view==='billing'&&<BillingCentre settings={settings}/>}
         {view==='communications'&&<CommunicationCenter notify={notify} onShare={record=>{setShareRecord(record);setModal('share');}}/>}
         {view==='settings'&&<Settings settings={settings} setSettings={setSettings} notify={notify} onBackup={portableBackup} onRestore={()=>backupInput.current.click()}/>}
       </main>
