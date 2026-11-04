@@ -4,6 +4,15 @@ import {validateCloudConfig} from '../src/cloud.js';
 import {DEFAULT_SETTINGS} from '../src/costing.js';import {DEFAULT_QUOTE} from '../src/quotation.js';import {demoWorkspace} from '../src/demo.js';
 const record=()=>createRecord(demoWorkspace(),DEFAULT_SETTINGS,{...DEFAULT_QUOTE,customer:'Example Customer'});
 test('quotation captures prices without uploading original CAD or geometry',()=>{const r=record();assert.ok(validateRecord(r.payload));assert.ok(r.payload.jobs.every(j=>!j.curves&&!j.contours));assert.ok(!r.payload.files);});
+test('optional quotation previews survive shared snapshots and invalid preview coordinates are rejected',()=>{
+ const r=createRecord(demoWorkspace(),DEFAULT_SETTINGS,{...DEFAULT_QUOTE,showPreviews:true});
+ assert.ok(r.payload.jobs[0].preview.length);
+ assert.ok(!r.payload.jobs[0].curves);
+ const restored=recordFromPayload(JSON.parse(JSON.stringify(r.payload)));
+ assert.ok(recordPdf(restored).output().includes('Preview'));
+ r.payload.jobs[0].preview[0][0]=[NaN,1];
+ assert.throws(()=>validateRecord(r.payload),/preview/);
+});
 test('later rate edits do not change a saved PDF snapshot',()=>{const settings=structuredClone(DEFAULT_SETTINGS),r=createRecord(demoWorkspace(),settings,{...DEFAULT_QUOTE,customer:'Example Customer'}),total=r.total;settings.materials.MS.rate=100;assert.equal(r.payload.settings.materials.MS.rate,8);assert.equal(r.total,total);assert.ok(recordPdf(r).output().includes('Example Customer'));});
 test('edited total or invalid dimensions cannot be imported as valid quotation',()=>{const r=record();r.payload.totals.total+=100;assert.throws(()=>validateRecord(r.payload),/does not match/);});
 test('team file reconstructs the identical pricing snapshot',()=>{const r=record(),roundtrip=recordFromPayload(JSON.parse(JSON.stringify(r.payload)));assert.equal(roundtrip.total,r.total);assert.equal(roundtrip.quoteNumber,r.quoteNumber);});

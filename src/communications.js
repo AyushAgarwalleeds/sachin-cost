@@ -2,6 +2,7 @@ import {estimate,jobProblems,DEFAULT_SETTINGS} from './costing.js';
 import {buildQuotation} from './quotation.js';
 import {getSaved,putSaved} from './storage.js';
 import {getCloudClient,uploadRecord,changeCloudStatus} from './cloud.js';
+import {jobPreview,validPreview} from './job-preview.js';
 const RECORDS='costing-records-v2';let queue=Promise.resolve(),remoteQueue=Promise.resolve();
 const changed=()=>{if(typeof window!=='undefined')window.dispatchEvent(new Event('cutcost-records-change'));};
 export const safeFilename=value=>String(value||'quotation').replace(/[<>:"/\\|?*\x00-\x1f]/g,'-').slice(0,100);
@@ -9,6 +10,7 @@ export function createRecord(workspace,settings,quote,kind='quotation'){
  if(workspace.jobs.some(job=>job.included&&job.estimateOnly))throw new Error('Repair provisional jobs in CAD before sharing.');
  const jobs=workspace.jobs.filter(j=>j.included).map(j=>Object.fromEntries(['id','name','material','thickness','quantity','length','piercings','area','kgRate','weightOverride','lengthOverride','piercingsOverride','bounds','included','reviewed','open','pdfSource','pdfScale'].map(k=>[k,j[k]])));
  if(!jobs.length||jobs.some(j=>jobProblems(j,settings,workspace.options.withMaterial).length))throw new Error('Resolve the job inputs before saving a shared estimate.');
+ if(quote.showPreviews)for(const [index,job] of jobs.entries())job.preview=jobPreview(workspace.jobs.filter(j=>j.included)[index]);
  const totals=estimate(jobs,settings,workspace.options),id=kind==='estimate'?workspace.id:crypto.randomUUID(),now=new Date().toISOString();
  if(!Number.isFinite(totals.total))throw new Error('Quotation total exceeds the supported numeric range.');
  const capturedQuote=structuredClone(quote);if(kind==='estimate'){capturedQuote.title='INTERNAL COSTING';capturedQuote.number=workspace.name;}
@@ -26,6 +28,7 @@ export function validateRecord(payload){
  for(const key of ['setup','discount','tax'])if(!Number.isFinite(payload.options[key])||payload.options[key]<0)throw new Error('Invalid quotation charges.');
  if(payload.options.discount>100||payload.options.tax>100)throw new Error('Invalid discount or tax.');
  for(const j of payload.jobs){if(!s.materials[j.material]||typeof j.name!=='string'||j.name.length>300||!Number.isFinite(j.length)||j.length<=0||!Number.isSafeInteger(j.piercings)||j.piercings<0||(j.area!==null&&(!Number.isFinite(j.area)||j.area<0))||!j.bounds||![j.bounds.width,j.bounds.height].every(n=>Number.isFinite(n)&&n>=0)||jobProblems(j,s,payload.options.withMaterial).length)throw new Error('Invalid saved job measurements.');}
+ for(const job of payload.jobs)if(job.preview!==undefined&&!validPreview(job.preview))throw new Error('Invalid saved job preview.');
  const total=estimate(payload.jobs,s,payload.options).total;if(!Number.isFinite(total)||Math.abs(total-payload.totals?.total)>.011)throw new Error('Saved quotation total does not match its pricing snapshot.');
  return payload;
 }

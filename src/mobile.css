@@ -1,0 +1,80 @@
+.flat-pattern{display:block;width:100%;height:340px;background:#f4f8f3;border:1px solid #dbe6db;border-radius:10px;margin:14px 0}
+.flat-cut{stroke:#2f6650;stroke-width:1.6}
+.flat-bend{stroke:#2374c6;stroke-width:1.6;stroke-dasharray:7 4}
+.flat-dimensions{fill:#294b3d}
+.flat-dimensions path{fill:none;stroke:#688171;stroke-width:1}
+.cone-profile{display:block;width:min(100%,420px);height:190px;margin:16px auto;font-size:12px}
+.quote-job-thumbnail{display:inline-block;width:48px;height:42px;vertical-align:middle;margin-right:6px}
+.sidebar nav{overflow-y:auto;min-height:0}
+.sidebar-close,.menu-backdrop{display:none}
+@media(max-width:760px){
+ .app-shell,.main-shell,main{min-width:0}
+ .main-shell main{padding:16px 12px 32px}
+ .main-shell input:not([type=checkbox]):not([type=radio]),.main-shell select,.main-shell textarea,
+ .modal input:not([type=checkbox]),.modal select,.modal textarea{font-size:16px}
+ .main-shell button,.modal button,.sidebar button{min-height:44px}
+ .main-shell .icon-btn,.modal .icon-btn{min-width:44px}
+ .topbar{padding:8px 10px;gap:6px}
+ .topbar .breadcrumb{min-width:0;gap:5px}
+ .breadcrumb>b{font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+ .topbar-right .top-avatar,.breadcrumb>span{display:none}
+ .page-heading{gap:12px;flex-wrap:wrap}
+ .page-heading p{font-size:13px}
+ .sidebar{height:100dvh;max-height:100dvh}
+ .sidebar nav{flex:1}
+ .sidebar nav button{font-size:14px}
+ .sidebar-bottom{flex-shrink:0}
+ .sidebar-bottom .local-note,.sidebar .company-label{display:none}
+ .sidebar-close{display:block;align-self:flex-end;background:none;border:0;padding:8px 12px;color:#36533b}
+ .menu-backdrop{display:block;position:fixed;inset:0;border:0;background:#15271c70;z-index:39}
+ .sidebar.mobile-open{z-index:40}
+ .modal,.modal.wide{width:calc(100vw - 16px);max-width:none;max-height:calc(100dvh - 16px)}
+ .modal-inner{max-height:calc(100dvh - 16px)}
+ .modal-header{padding:12px}
+ .modal-body{padding:14px 12px calc(14px + env(safe-area-inset-bottom))}
+ .form-grid,.quotation-layout{grid-template-columns:minmax(0,1fr)}
+ .form-grid{gap:14px}
+ .quotation-form,.quotation-side{min-width:0}
+ .quote-checkboxes{gap:8px}
+ .check-label{min-height:40px;font-size:13px}
+ .modal-actions{gap:8px}
+ .modal-actions .button{font-size:13px;flex:1}
+ .business-page input:not([type=checkbox]),.business-page select{min-height:44px}
+ .business-page button{font-size:13px;line-height:1.35}
+ .business-page label{font-size:13px}
+ .business-card{padding:12px}
+ .business-metrics{display:grid;grid-template-columns:repeat(2,minmax(0,1fr))}
+ .business-metrics span{min-width:0}
+ .business-grid{grid-template-columns:repeat(2,minmax(0,1fr))}
+ .business-grid label{min-width:0}
+ .business-grid input,.business-grid select{width:100%}
+ .flat-pattern{height:270px}
+ .business-table{font-size:13px}
+ .studio-layout{display:flex;flex-direction:column}
+ .studio-left{width:100%;overflow:visible;max-height:none;border-bottom:1px solid #dce7d8}
+ .studio-tools{display:flex;overflow-x:auto;gap:5px;padding:7px}
+ .studio-tools>button{flex:0 0 72px;min-height:55px}
+ .studio-tools>button span{font-size:11px}
+ .studio-guide-tools{grid-template-columns:repeat(3,minmax(0,1fr));padding:0 6px}
+ .studio-guide-tools button{font-size:11px;min-height:44px;margin:0}
+ .studio-left>.cad-field{padding:0 8px}
+ .studio-undo{display:flex;padding:4px 8px;gap:8px}
+ .studio-center{min-height:520px;width:100%}
+ .studio-canvas{min-height:340px}
+ .studio-properties{width:100%;display:block}
+ .studio-property-section{padding:15px}
+ .studio-properties .cad-field input,.studio-properties select{font-size:16px;min-height:44px}
+ .studio-options{gap:9px;padding:9px}
+ .studio-options label,.studio-status{font-size:12px}
+ .studio-command input{font-size:16px}
+ .studio-command button{font-size:12px}
+ .preview-edit-toolbar{gap:8px;font-size:12px}
+ .preview-edit-toolbar button{font-size:12px}
+ .job-toolbar .search{width:100%}
+ .job-name-cell b{white-space:normal}
+ .rate-grid-editable input{min-height:44px}
+}
+@media(max-width:380px){
+ .business-grid{grid-template-columns:minmax(0,1fr)}
+ .topbar .save-state{display:none}
+}

@@ -12,6 +12,8 @@ import CadStudio from './CadStudio.jsx';
 import ManualCosting from './ManualCosting.jsx';
 import Shearing from './Shearing.jsx';
 import Bending from './Bending.jsx';
+import FabricationCalculator from './FabricationCalculator.jsx';
+import {jobPreview} from './job-preview.js';
 import BillingCentre from './BillingCentre.jsx';
 import {dimensionEntities,resolveDimension} from './cad-dimensions.js';
 import CleanupPanel from './CleanupPanel.jsx';
@@ -19,7 +21,7 @@ import ErrorBoundary from './ErrorBoundary.jsx';
 import {ANALYSIS_VERSION} from './job-detection.js';
 import CommunicationCenter,{ShareQuotation} from './CommunicationCenter.jsx';
 import {createRecord,prepareQuotationRecord,saveRecord,flushRecords,localRecords} from './communications.js';
-import {tagResult,migrateWorkspace,preserveJobInputs,mergeProjectHistory} from './workspace.js';
+import {tagResult,nameFileJobs,migrateWorkspace,preserveJobInputs,mergeProjectHistory} from './workspace.js';
 import CadPreview from './CadPreview.jsx';
 import {assignManualJob} from './manual-jobs.js';
 import {csvCell} from './csv.js';
@@ -27,6 +29,7 @@ import {repairForEstimate} from './estimate-repair.js';
 import {PDF_JOIN_TOLERANCE} from './pdf-selection.js';
 import './styles.css';
 import './job-controls.css';
+import './mobile.css';
 
 const EMPTY = () => ({id:crypto.randomUUID(),name:'Untitled estimate',customer:'',files:[],jobs:[],isDemo:false,unitsConfirmed:false,options:{withMaterial:false,setup:0,discount:0,tax:0},updatedAt:Date.now()});
 const clone = obj => structuredClone(obj);
@@ -75,7 +78,7 @@ export default function App(){
       for(const f of fileList){
         const ext=f.name.split('.').pop().toLowerCase();if(!['dxf','dwg','pdf'].includes(ext)){notify(`${f.name}: choose a DXF, DWG or PDF drawing.`,'error');continue;}
         if(f.size>30*1024*1024){notify(`${f.name}: file exceeds the 30 MB limit. Split the drawing.`,'error');continue;}
-        try{const raw=ext!=='dxf'?await f.arrayBuffer():await f.text(),id=crypto.randomUUID(),result=tagResult(await parse(raw,ext),id);
+        try{const raw=ext!=='dxf'?await f.arrayBuffer():await f.text(),id=crypto.randomUUID(),result=tagResult(await parse(raw,ext),id,f.name);
           result.jobs=result.jobs.map(j=>({...j,fileId:id,thickness:settings.defaultThickness}));imported.push({id,name:f.name,format:ext,raw,result,ignoredLayers:[]});
         }catch(e){notify(`${f.name}: ${e.message}`,'error');}
       }
@@ -94,7 +97,7 @@ export default function App(){
       const changed={...file,...patch},result=tagResult(await parse(file.raw,file.format,{unit:changed.unitOverride,ignoredLayers:changed.ignoredLayers}),file.id);
       const sameUnits=result.unit===file.result.unit;
       const previous=sameUnits?workspace.jobs.filter(job=>job.fileId===file.id&&!job.sourceFileIds?.some(id=>id!==file.id)):[];
-      result.jobs=preserveJobInputs(result.jobs,previous,settings.defaultThickness).map(job=>({...job,fileId:file.id}));
+      result.jobs=nameFileJobs(preserveJobInputs(result.jobs,previous,settings.defaultThickness),file.name).map(job=>({...job,fileId:file.id}));
       update(w=>({...w,files:w.files.map(f=>f.id===file.id?{...changed,result}:f),jobs:[...w.jobs.filter(j=>j.fileId!==file.id&&!j.sourceFileIds?.includes(file.id)),...result.jobs],unitsConfirmed:sameUnits&&w.unitsConfirmed}));setSelected(null);setChecked([]);
       notify(sameUnits?'Layers updated. Matching jobs kept their costing inputs.':'Units changed. Confirm the new dimensions and review the jobs.');
     }catch(e){notify(e.message,'error');}finally{setBusy(false);}
@@ -103,8 +106,8 @@ export default function App(){
     const w=migrateWorkspace(original);let jobs=w.jobs;
     for(const f of w.files){if(f.result.analysisVersion===ANALYSIS_VERSION)continue;
       try{const parsed=f.edited?await parse(f.result.curves,'curves',{tolerance:f.format==='pdf'?PDF_JOIN_TOLERANCE:rateSettings.tolerance,importErrors:f.result.importErrors,annotationCount:f.result.annotationCount,annotations:f.result.annotations}):await parse(f.raw,f.format,{tolerance:rateSettings.tolerance,unit:f.unitOverride,ignoredLayers:f.ignoredLayers});
-        const result=tagResult(parsed,f.id);if(f.edited){result.unit=f.result.unit;result.detectedUnit=f.result.detectedUnit;}
-        result.jobs=preserveJobInputs(result.jobs.map(job=>f.format==='pdf'?{...job,pdfSource:true}:job),jobs.filter(j=>j.fileId===f.id||j.sourceFileIds?.includes(f.id)),rateSettings.defaultThickness).map(j=>({...j,fileId:f.id}));f.result=result;jobs=[...jobs.filter(j=>j.fileId!==f.id&&!j.sourceFileIds?.includes(f.id)),...result.jobs];
+        const result=tagResult(parsed,f.id,f.name);if(f.edited){result.unit=f.result.unit;result.detectedUnit=f.result.detectedUnit;}
+        result.jobs=preserveJobInputs(result.jobs.map(job=>f.format==='pdf'?{...job,pdfSource:true}:job),jobs.filter(j=>j.fileId===f.id||j.sourceFileIds?.includes(f.id)),rateSettings.defaultThickness).map(j=>({...j,fileId:f.id}));result.jobs=nameFileJobs(result.jobs,f.name);f.result=result;jobs=[...jobs.filter(j=>j.fileId!==f.id&&!j.sourceFileIds?.includes(f.id)),...result.jobs];
       }catch(error){f.result={...f.result,errors:[...f.result.errors,'Rechecking the drawing failed: '+error.message]};}
     }return {...w,jobs};
   }
@@ -123,7 +126,7 @@ export default function App(){
         changed=true;removed+=count+annotationHits;
         const result=await parse(curves,'curves',{tolerance,importErrors:f.result.importErrors||[],annotationCount:clearAnnotations?0:Math.max(0,(f.result.annotationCount||0)-(!intent?annotationHits:0)),annotations:clearAnnotations?[]:!intent?(f.result.annotations||[]).filter(a=>!picked.has(a.id)):f.result.annotations});result.unit=f.result.unit;result.detectedUnit=f.result.detectedUnit;result.layers=f.result.layers;
         if(manual&&result.manualErrors?.some(g=>g.id===manual.id))throw new Error(result.manualErrors.find(g=>g.id===manual.id).message);
-        result.jobs=preserveJobInputs(result.jobs.map(job=>pdfSource?{...job,pdfSource:true}:job),next.jobs.filter(j=>j.fileId===f.id||j.sourceFileIds?.includes(f.id)),settings.defaultThickness).map(j=>({...j,fileId:f.id}));f.result=result;f.edited=f.edited||!redetect;next.jobs=[...next.jobs.filter(j=>j.fileId!==f.id&&!j.sourceFileIds?.includes(f.id)),...result.jobs];
+        result.jobs=preserveJobInputs(result.jobs.map(job=>pdfSource?{...job,pdfSource:true}:job),next.jobs.filter(j=>j.fileId===f.id||j.sourceFileIds?.includes(f.id)),settings.defaultThickness).map(j=>({...j,fileId:f.id}));result.jobs=nameFileJobs(result.jobs,f.name);f.result=result;f.edited=f.edited||!redetect;next.jobs=[...next.jobs.filter(j=>j.fileId!==f.id&&!j.sourceFileIds?.includes(f.id)),...result.jobs];
       }
       if(!changed||liveWorkspace.current?.id!==workspace.id)return false;const latest=liveWorkspace.current;next.jobs=preserveJobInputs(next.jobs,latest.jobs,settings.defaultThickness);setElementUndo(a=>[...a.slice(-19),clone(workspace)]);setWorkspace({...next,name:latest.name,customer:latest.customer,options:latest.options,updatedAt:Date.now()});setSelected(manual?'manual:'+manual.id:null);setChecked([]);
       if(manual&&next.jobs.find(job=>job.manualJobId===manual.id)?.pdfSource){setModal('job');notify('PDF job added. Enter a known part width or height to calculate its cost.');return true;}
@@ -145,6 +148,10 @@ export default function App(){
         ignored.has(c.id)?{...c,cutIntent:'ignore',ignoreReason:ignored.get(c.id)}:c);
     }),layers:[...new Set(workspace.files.flatMap(f=>f.result.layers))],importErrors:workspace.files.flatMap(f=>f.result.importErrors||[]),workspaceId:workspace.id,ignoredIds:workspace.files.flatMap(f=>(f.result.ignoredCurves||[]).filter(c=>!repairing.has(c.id)).map(c=>c.id)),annotations:workspace.files.flatMap(f=>f.result.annotations||[])}:null);
     setCadKey(k=>k+1);setView('cad');setMenu(false);setModal(null);
+  }
+  function openPattern(data){
+    setCadSource({...data,importErrors:[],nonCutLayers:['BEND','CONSTRUCTION']});
+    setCadKey(key=>key+1);setView('cad');setMenu(false);
   }
   function openIssue(issue){
     setActiveIssue(issue);
@@ -266,6 +273,7 @@ export default function App(){
     <input ref={fileInput} type="file" accept=".dxf,.dwg,.pdf" multiple hidden onChange={e=>importFiles([...e.target.files])}/>
     <input ref={backupInput} type="file" accept=".json" hidden onChange={e=>e.target.files[0]&&restore(e.target.files[0])}/>
     <aside className={`sidebar ${menu?'mobile-open':''}`}>
+      <button className="sidebar-close" onClick={()=>setMenu(false)} aria-label="Close menu"><X size={20}/></button>
       <a className="brand" href="#" onClick={e=>{e.preventDefault();setView('estimate');}}><span className="brand-mark"><Zap size={21} fill="currentColor"/></span><span>Cost by Ayush</span></a>
       <div className="company-label"><span className="company-avatar">CA</span><span><b>Cost by Ayush</b><small>YOUR CUTTING WORKSPACE</small></span></div>
       <div className="nav-caption">WORKSPACE</div>
@@ -275,6 +283,7 @@ export default function App(){
         <button className={view==='manual'?'active':''} onClick={()=>{setView('manual');setMenu(false);}}><Ruler size={18}/>Manual costing</button>
         <button className={view==='shearing'?'active':''} onClick={()=>{setView('shearing');setMenu(false);}}><Package size={18}/>Shearing</button>
         <button className={view==='bending'?'active':''} onClick={()=>{setView('bending');setMenu(false);}}><Ruler size={18}/>Bending</button>
+        <button className={view==='fabrication'?'active':''} onClick={()=>{setView('fabrication');setMenu(false);}}><Layers size={18}/>Fabrication calculator</button>
         <button className={view==='billing'?'active':''} onClick={()=>{setView('billing');setMenu(false);}}><FileText size={18}/>Billing centre</button>
         <button className={view==='communications'?'active':''} onClick={()=>{setView('communications');setMenu(false);}}><MessageCircle size={18}/>Communication centre</button>
         <button className={view==='history'?'active':''} onClick={()=>{setView('history');setMenu(false);}}><FolderClock size={18}/>Saved projects<span className="count-pill">{saved.length}</span></button>
@@ -285,8 +294,9 @@ export default function App(){
         <div className="profile"><span>CA</span><div><b>Factory workspace</b><small>Factory use · v2.5</small></div><button className="icon-btn" title="Install app" onClick={installApp}><Download size={17}/></button></div>
       </div>
     </aside>
+    {menu&&<button className="menu-backdrop" aria-label="Dismiss navigation" onClick={()=>setMenu(false)}/>}
     <div className="main-shell">
-      <header className="topbar"><div className="breadcrumb"><button className="icon-btn mobile-menu" onClick={()=>setMenu(!menu)} aria-label="Menu"><Menu size={20}/></button><span>Workspace</span><ChevronRight size={14}/><b>{({estimate:'Cost calculator',history:'Saved projects',settings:'Rates & settings',cad:'2D CAD workspace',communications:'Communication centre',manual:'Manual costing',shearing:'Shearing',bending:'Bending',billing:'Billing centre'})[view]}</b></div><div className="topbar-right"><span className={`save-state ${storageStatus.includes('failed')?'bad':''}`}><i/>{storageStatus}</span><button className="plain-button install-button" onClick={installApp}><Download size={15}/>Install app</button><span className="top-avatar">CA</span></div></header>
+      <header className="topbar"><div className="breadcrumb"><button className="icon-btn mobile-menu" onClick={()=>setMenu(!menu)} aria-label="Menu"><Menu size={20}/></button><span>Workspace</span><ChevronRight size={14}/><b>{({estimate:'Cost calculator',history:'Saved projects',settings:'Rates & settings',cad:'2D CAD workspace',communications:'Communication centre',manual:'Manual costing',shearing:'Shearing',bending:'Bending',fabrication:'Fabrication calculator',billing:'Billing centre'})[view]}</b></div><div className="topbar-right"><span className={`save-state ${storageStatus.includes('failed')?'bad':''}`}><i/>{storageStatus}</span><button className="plain-button install-button" onClick={installApp}><Download size={15}/>Install app</button><span className="top-avatar">CA</span></div></header>
       <main>
         {view==='estimate'&&<>
           <div className="page-heading"><div><div className="eyebrow">LESS GUESSWORK. MORE PRECISION.</div><h1>Laser cutting calculator<span className="heading-dot">.</span></h1><p>From drawing to quotation, in one clear workspace.</p></div><button className="button secondary" onClick={newEstimate}><Plus size={17}/>New estimate</button></div>
@@ -375,7 +385,8 @@ export default function App(){
         {view==='cad'&&<CadStudio key={cadKey} source={cadSource} onApply={useCad} onCancel={()=>setView('estimate')} notify={notify} parseDrawing={async f=>{if(f.size>30*1024*1024)throw new Error('Drawing exceeds 30 MB.');const ext=f.name.split('.').pop().toLowerCase();if(!['dxf','dwg','pdf'].includes(ext))throw new Error('Choose a DXF or DWG.');return parse(ext!=='dxf'?await f.arrayBuffer():await f.text(),ext);}}/>}
         {view==='manual'&&<ManualCosting settings={settings} busy={busy} onEstimate={createManualEstimate}/>}
         {view==='shearing'&&<Shearing settings={settings}/>}
-        {view==='bending'&&<Bending settings={settings}/>}
+        {view==='bending'&&<Bending settings={settings} onOpenCad={openPattern}/>}
+        {view==='fabrication'&&<FabricationCalculator settings={settings} onOpenCad={openPattern}/>}
         {view==='billing'&&<BillingCentre settings={settings}/>}
         {view==='communications'&&<CommunicationCenter notify={notify} onShare={record=>{setShareRecord(record);setModal('share');}}/>}
         {view==='settings'&&<Settings settings={settings} setSettings={setSettings} notify={notify} onBackup={portableBackup} onRestore={()=>backupInput.current.click()}/>}
@@ -438,7 +449,12 @@ function JobEditor({job:j,settings,withMaterial,onChange,onClose}){
 }
 function QuotationEditor({workspace,settings,quote:q,setQuote,onExport,onShare}){
   const t=estimate(workspace.jobs,settings,workspace.options),set=p=>setQuote(v=>({...v,...p}));
-  return <div className="quotation-layout"><div className="quotation-form"><p className="modal-intro">Choose what the customer sees. Your rates and internal calculations stay in the workspace unless you include them.</p><div className="form-grid"><Field label="Document title"><input maxLength={30} value={q.title} onChange={e=>set({title:e.target.value})}/></Field><Field label="Quotation number"><input maxLength={40} value={q.number} onChange={e=>set({number:e.target.value})}/></Field><Field label="Customer name *"><input value={q.customer} maxLength={120} onChange={e=>set({customer:e.target.value})}/></Field><Field label="Date"><input type="date" value={q.date} onChange={e=>set({date:e.target.value})}/></Field></div><div className="form-grid"><Field label="Customer email"><input type="email" maxLength={120} value={q.customerEmail||''} onChange={e=>set({customerEmail:e.target.value})}/></Field><Field label="WhatsApp number"><input type="tel" maxLength={30} value={q.customerPhone||''} onChange={e=>set({customerPhone:e.target.value})}/></Field></div><Field label="Customer address"><textarea rows="2" maxLength={500} value={q.customerAddress} onChange={e=>set({customerAddress:e.target.value})}/></Field><Field label="Drawing / purchase reference"><input value={q.reference} maxLength={100} onChange={e=>set({reference:e.target.value})}/></Field><h3>Show in the quotation</h3><div className="quote-checkboxes">{Object.entries({material:'Material',thickness:'Thickness',quantity:'Quantity',dimensions:'Part dimensions',length:'Cutting length',piercings:'Piercing count',weight:'Weight',unit:'Unit price',amount:'Line total'}).map(([key,label])=><label key={key} className="check-label"><input type="checkbox" checked={q.columns[key]} onChange={e=>set({columns:{...q.columns,[key]:e.target.checked}})}/>{label}</label>)}</div><hr/><div className="quote-checkboxes">{Object.entries({showCompanyDetails:'Company contact details',showTerms:'Terms & conditions',showBreakdown:'Cost breakdown',showTax:'Separate tax line',showNote:'Notes'}).map(([key,label])=><label key={key} className="check-label"><input type="checkbox" checked={q[key]} onChange={e=>set({[key]:e.target.checked})}/>{label}</label>)}</div><Field label="Customer-facing notes"><textarea rows="3" maxLength={3000} value={q.note} onChange={e=>set({note:e.target.value})}/></Field>{!settings.address&&<div className="notice info"><Info size={17}/><p>Office details can be added later in Rates & settings. Empty contact fields are omitted from the PDF.</p></div>}</div><div className="quotation-side"><div className="quote-paper"><span className="quote-paper-accent"/><strong>{settings.company}</strong><small>LASER CUTTING & FABRICATION</small><div className="paper-title"><b>{q.title}</b><span>{q.number}<br/>{q.date}</span></div><span className="paper-muted">PREPARED FOR</span><b>{q.customer||'Customer name'}</b><small>{q.customerAddress}</small><div className="paper-table"><div><b>Description</b>{q.columns.quantity&&<b>Qty.</b>}{q.columns.amount&&<b>Amount</b>}</div>{t.rows.slice(0,5).map(r=><div key={r.job.id}><span>{r.job.name}{q.columns.material&&<small>{r.job.material}{q.columns.thickness?' · '+r.job.thickness+' mm':''}</small>}</span>{q.columns.quantity&&<span>{r.job.quantity}</span>}{q.columns.amount&&<span>{money(r.total)}</span>}</div>)}{t.rows.length>5&&<small>+ {t.rows.length-5} more jobs</small>}</div><div className="paper-total"><span>Total (INR)</span><b>{money(t.total)}</b></div>{q.showTerms&&<><b className="paper-terms-heading">Terms & conditions</b><p>{settings.terms.slice(0,150)}{settings.terms.length>150?'…':''}</p></>}{workspace.isDemo&&<span className="sample-watermark">SAMPLE</span>}</div><p className="field-hint center">Content preview · exported PDF adjusts to selected columns</p><button className="button primary full" onClick={onExport}><Download size={17}/>Download quotation PDF</button><button className="button secondary full" style={{marginTop:10}} onClick={onShare}><Share2 size={16}/>Save & share quotation</button></div></div>;
+  return <div className="quotation-layout"><div className="quotation-form"><p className="modal-intro">Choose what the customer sees. Your rates and internal calculations stay in the workspace unless you include them.</p><div className="form-grid"><Field label="Document title"><input maxLength={30} value={q.title} onChange={e=>set({title:e.target.value})}/></Field><Field label="Quotation number"><input maxLength={40} value={q.number} onChange={e=>set({number:e.target.value})}/></Field><Field label="Customer name *"><input value={q.customer} maxLength={120} onChange={e=>set({customer:e.target.value})}/></Field><Field label="Date"><input type="date" value={q.date} onChange={e=>set({date:e.target.value})}/></Field></div><div className="form-grid"><Field label="Customer email"><input type="email" maxLength={120} value={q.customerEmail||''} onChange={e=>set({customerEmail:e.target.value})}/></Field><Field label="WhatsApp number"><input type="tel" maxLength={30} value={q.customerPhone||''} onChange={e=>set({customerPhone:e.target.value})}/></Field></div><Field label="Customer address"><textarea rows="2" maxLength={500} value={q.customerAddress} onChange={e=>set({customerAddress:e.target.value})}/></Field><Field label="Drawing / purchase reference"><input value={q.reference} maxLength={100} onChange={e=>set({reference:e.target.value})}/></Field><h3>Show in the quotation</h3><div className="quote-checkboxes">{Object.entries({material:'Material',thickness:'Thickness',quantity:'Quantity',dimensions:'Part dimensions',length:'Cutting length',piercings:'Piercing count',weight:'Weight',unit:'Unit price',amount:'Line total'}).map(([key,label])=><label key={key} className="check-label"><input type="checkbox" checked={q.columns[key]} onChange={e=>set({columns:{...q.columns,[key]:e.target.checked}})}/>{label}</label>)}</div><hr/><div className="quote-checkboxes">{Object.entries({showPreviews:'Job preview images',showCompanyDetails:'Company contact details',showTerms:'Terms & conditions',showBreakdown:'Cost breakdown',showTax:'Separate tax line',showNote:'Notes'}).map(([key,label])=><label key={key} className="check-label"><input type="checkbox" checked={Boolean(q[key])} onChange={e=>set({[key]:e.target.checked})}/>{label}</label>)}</div><Field label="Customer-facing notes"><textarea rows="3" maxLength={3000} value={q.note} onChange={e=>set({note:e.target.value})}/></Field>{!settings.address&&<div className="notice info"><Info size={17}/><p>Office details can be added later in Rates & settings. Empty contact fields are omitted from the PDF.</p></div>}</div><div className="quotation-side"><div className="quote-paper"><span className="quote-paper-accent"/><strong>{settings.company}</strong><small>LASER CUTTING & FABRICATION</small><div className="paper-title"><b>{q.title}</b><span>{q.number}<br/>{q.date}</span></div><span className="paper-muted">PREPARED FOR</span><b>{q.customer||'Customer name'}</b><small>{q.customerAddress}</small><div className="paper-table"><div><b>Description</b>{q.columns.quantity&&<b>Qty.</b>}{q.columns.amount&&<b>Amount</b>}</div>{t.rows.slice(0,5).map(r=><div key={r.job.id}><span>{q.showPreviews&&<JobThumbnail job={r.job}/>}<span>{r.job.name}</span>{q.columns.material&&<small>{r.job.material}{q.columns.thickness?' · '+r.job.thickness+' mm':''}</small>}</span>{q.columns.quantity&&<span>{r.job.quantity}</span>}{q.columns.amount&&<span>{money(r.total)}</span>}</div>)}{t.rows.length>5&&<small>+ {t.rows.length-5} more jobs</small>}</div><div className="paper-total"><span>Total (INR)</span><b>{money(t.total)}</b></div>{q.showTerms&&<><b className="paper-terms-heading">Terms & conditions</b><p>{settings.terms.slice(0,150)}{settings.terms.length>150?'…':''}</p></>}{workspace.isDemo&&<span className="sample-watermark">SAMPLE</span>}</div><p className="field-hint center">Content preview · exported PDF adjusts to selected columns</p><button className="button primary full" onClick={onExport}><Download size={17}/>Download quotation PDF</button><button className="button secondary full" style={{marginTop:10}} onClick={onShare}><Share2 size={16}/>Save & share quotation</button></div></div>;
+}
+function JobThumbnail({job}){
+  return <svg className="quote-job-thumbnail" viewBox="-.06 -.06 1.12 1.12" role="img" aria-label={'Preview of '+job.name}>
+    {jobPreview(job).map((path,index)=><polyline key={index} points={path.map(point=>point.join(',')).join(' ')} fill="none" stroke="#285742" strokeWidth=".012"/>)}
+  </svg>;
 }
 function InlineCuttingRate({material,rate,onChange}){
   const [draft,setDraft]=useState(null);

@@ -1,12 +1,13 @@
 import { jsPDF } from 'jspdf';
 import autoTable from 'jspdf-autotable';
 import { estimate, num } from './costing.js';
+import {jobPreview} from './job-preview.js';
 
 export function freshQuote(){return {
   title:'QUOTATION', number:`CA-${new Date().toLocaleDateString('en-CA').replaceAll('-','')}-${crypto.randomUUID().slice(0,8).toUpperCase()}`, date:new Date().toLocaleDateString('en-CA'),
   customer:'', customerAddress:'', customerEmail:'', customerPhone:'', reference:'', note:'',
   columns:{ material:true, thickness:true, quantity:true, dimensions:false, length:false, piercings:false, weight:false, unit:true, amount:true },
-  showCompanyDetails:true, showTerms:true, showBreakdown:false, showTax:true, showNote:true
+  showPreviews:false, showCompanyDetails:true, showTerms:true, showBreakdown:false, showTax:true, showNote:true
 };}
 export const DEFAULT_QUOTE=freshQuote();
 const price=n=>'Rs. '+new Intl.NumberFormat('en-IN',{minimumFractionDigits:2,maximumFractionDigits:2}).format(n);
@@ -36,17 +37,25 @@ export function buildQuotation(jobs,settings,options,quote,isDemo=false) {
   if(quote.customerAddress){const lines=doc.splitTextToSize(clean(quote.customerAddress),117);text(lines,16,y,9,muted);y+=lines.length*4.5;}
   if(quote.reference){doc.setFontSize(9);const lines=doc.splitTextToSize(clean(`Reference: ${quote.reference}`),176);text(lines,16,y+3,9,muted);y+=lines.length*4.5+4;}
   y+=7;
-  const defs=[['#','index'],['Description','name'],...[
+  const defs=[['#','index'],...(quote.showPreviews?[['Preview','preview']]:[]),['Description','name'],...[
     ['Material','material'],['Thk. mm','thickness'],['Qty.','quantity'],['Size mm','dimensions'],['Cut mm/pc','length'],['Pierces/pc','piercings'],['kg/pc','weight'],['Unit price','unit'],['Amount','amount']
   ].filter(([,key])=>columns[key])];
   const body=totals.rows.map((r,i)=>{
     const j=r.job,values={index:i+1,name:j.name,material:j.material,thickness:num(j.thickness),quantity:j.quantity,dimensions:`${num(j.bounds.width*(j.pdfScale??1),1)} x ${num(j.bounds.height*(j.pdfScale??1),1)}`,length:num(r.length),piercings:r.piercings,weight:r.weight===null?'-':num(r.weight,3),unit:price(r.unit),amount:price(r.total)};
-    return defs.map(([,key])=>clean(values[key]));
+    return defs.map(([,key])=>key==='preview'?'':clean(values[key]));
   });
   autoTable(doc,{startY:y,margin:{left:16,right:16,top:20,bottom:22},head:[defs.map(([label])=>label)],body,
     theme:'grid',styles:{font:'helvetica',fontSize:defs.length>8?6.5:8.5,cellPadding:3.2,lineColor:[225,230,226],lineWidth:.15,textColor:ink,overflow:'linebreak'},
     headStyles:{fillColor:ink,textColor:[255,255,255],fontStyle:'bold'},alternateRowStyles:{fillColor:[246,248,244]},
-    columnStyles:{0:{cellWidth:8}},rowPageBreak:'avoid'});
+    columnStyles:{0:{cellWidth:8},...(quote.showPreviews?{1:{cellWidth:22,minCellHeight:20}}:{})},rowPageBreak:'avoid',
+    didDrawCell:data=>{
+      if(!quote.showPreviews||data.section!=='body'||data.column.index!==1)return;
+      const preview=jobPreview(totals.rows[data.row.index].job),size=16;
+      const x=data.cell.x+(data.cell.width-size)/2,y=data.cell.y+(data.cell.height-size)/2;
+      doc.setDrawColor(...green);doc.setLineWidth(.22);
+      for(const path of preview)for(let i=1;i<path.length;i++)
+        doc.line(x+path[i-1][0]*size,y+path[i-1][1]*size,x+path[i][0]*size,y+path[i][1]*size);
+    }});
   y=doc.lastAutoTable.finalY+9;
   const rows=[];
   if(quote.showBreakdown){rows.push(['Cutting + piercing',totals.cutting]);if(options.withMaterial)rows.push(['Material',totals.material]);}

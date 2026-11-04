@@ -2,7 +2,7 @@ import React,{useEffect,useRef,useState} from 'react';
 import {jsPDF} from 'jspdf';
 import autoTable from 'jspdf-autotable';
 import {money,num,roundMoney} from './costing.js';
-import {nestSheet,sheetRemnants,sheetWeight,snapPlacement,validPlacement} from './shearing.js';
+import {nestSheet,sheetRemnants,sheetWeight,shearingWeights,snapPlacement,validPlacement} from './shearing.js';
 import {downloadBlob,getSaved,updateSaved} from './storage.js';
 import {csvCell} from './csv.js';
 import './workshop.css';
@@ -11,6 +11,7 @@ const remnantKey='shearing-remnants';
 const newRow=(name='Part',width=500,height=500)=>({id:crypto.randomUUID(),name,width,height,quantity:1});
 const inputNumber=e=>e.target.value===''?'':Number(e.target.value);
 const dimensions=rect=>num(rect.width)+' × '+num(rect.height)+' mm';
+const weightBases={parts:'Cut jobs',sheet:'Whole mother sheet',remnants:'Remaining sheet'};
 
 function LayoutLabel({rect,name,maxSize}){
   const size=dimensions(rect);
@@ -29,6 +30,7 @@ export default function Shearing({settings}){
   const [material,setMaterial]=useState('MS'),[thickness,setThickness]=useState(settings.defaultThickness);
   const [rate,setRate]=useState(5),[materialRate,setMaterialRate]=useState(0),[rotate,setRotate]=useState(true);
   const [withMaterial,setWithMaterial]=useState(false);
+  const [serviceBasis,setServiceBasis]=useState('parts'),[materialBasis,setMaterialBasis]=useState('parts');
   const [client,setClient]=useState(''),[reference,setReference]=useState('');
   const [layout,setLayout]=useState(null),[selected,setSelected]=useState(null),[message,setMessage]=useState('');
   const [inventory,setInventory]=useState([]),[saving,setSaving]=useState(false);
@@ -38,13 +40,17 @@ export default function Shearing({settings}){
   useEffect(()=>{getSaved(remnantKey).then(items=>setInventory(items||[])).catch(error=>setMessage(error.message));},[]);
   const density=settings.materials[material].density;
   const remnants=layout?sheetRemnants(sheet,layout.parts):[];
-  const validCost=Number.isFinite(thickness)&&thickness>0&&Number.isFinite(rate)&&rate>=0&&
+  const validWeight=Number.isFinite(thickness)&&thickness>0;
+  const validCost=validWeight&&Number.isFinite(rate)&&rate>=0&&
     (!withMaterial||Number.isFinite(materialRate)&&materialRate>0);
   const weight=rect=>sheetWeight(rect,thickness,density);
   const serviceCost=rect=>roundMoney(weight(rect)*rate);
   const metalCost=rect=>withMaterial?roundMoney(weight(rect)*materialRate):0;
   const cost=rect=>serviceCost(rect)+metalCost(rect);
-  const placedCost=layout?.parts.reduce((sum,part)=>sum+cost(part),0);
+  const weights=shearingWeights(sheet,layout?.parts||[],thickness,density);
+  const serviceTotal=serviceBasis==='parts'?layout?.parts.reduce((sum,part)=>sum+serviceCost(part),0):roundMoney(weights[serviceBasis]*rate);
+  const materialTotal=withMaterial?(materialBasis==='parts'?layout?.parts.reduce((sum,part)=>sum+metalCost(part),0):roundMoney(weights[materialBasis]*materialRate)):0;
+  const placedCost=roundMoney(serviceTotal+materialTotal);
   const chosen=layout?.parts.find(part=>part.id===selected);
   const labelSize=Math.min(sheet.width/47,sheet.height/23);
   const select=part=>{setSelected(part.id);setPosition({x:part.x,y:part.y});};
@@ -71,7 +77,7 @@ export default function Shearing({settings}){
     return snapPlacement(next,sheet,layout.parts,tolerance,settle)??(settle?null:next);
   }
   async function saveRemnants(){
-    if(saveLock.current||!remnants.length||!validCost||layout.unplaced.length)return;
+    if(saveLock.current||!remnants.length||!validWeight||layout.unplaced.length)return;
     if(!client.trim()){setMessage('Enter a client name to save the remnants.');return;}
     saveLock.current=true;setSaving(true);
     const batch=crypto.randomUUID();
@@ -85,10 +91,14 @@ export default function Shearing({settings}){
   }
   function exportLayout(){
     const entries=[
-      ['Type','Name','Client','Reference','Material','Thickness mm','Width mm','Height mm','X mm','Y mm','Weight kg','Total INR'],
+      ['Type','Name','Client','Reference','Material','Thickness mm','Width mm','Height mm','X mm','Y mm','Weight kg','Value at job weight INR'],
       ...layout.parts.map(part=>['Part',part.name,client,reference,material,thickness,part.width,part.height,part.x,part.y,weight(part),cost(part)]),
       ...remnants.map(rect=>['Remnant','',client,reference,material,thickness,rect.width,rect.height,rect.x,rect.y,weight(rect),'']),
-      ...layout.unplaced.map(part=>['Unplaced',part.name,client,reference,material,thickness,part.width,part.height,'','',weight(part),''])
+      ...layout.unplaced.map(part=>['Unplaced',part.name,client,reference,material,thickness,part.width,part.height,'','',weight(part),'']),
+      [],['Pricing basis','Weight kg','Rate INR per kg','Amount INR'],
+      ['Service / '+weightBases[serviceBasis],weights[serviceBasis],rate,serviceTotal],
+      ...(withMaterial?[['Material / '+weightBases[materialBasis],weights[materialBasis],materialRate,materialTotal]]:[]),
+      ['Total estimate','','',placedCost]
     ];
     downloadBlob(new Blob([entries.map(row=>row.map(csvCell).join(',')).join('\r\n')],{type:'text/csv'}),'shearing-layout.csv');
   }
@@ -101,17 +111,22 @@ export default function Shearing({settings}){
     doc.setFontSize(10);
     const details=[client&&'Client  '+clean(client),reference&&'Reference  '+clean(reference),
       `${material} / ${num(thickness)} mm / Mother sheet ${num(sheet.width)} x ${num(sheet.height)} mm`,
-      `Shearing rate  Rs. ${num(rate)}/kg${withMaterial?' / Material  Rs. '+num(materialRate)+'/kg':''}`].filter(Boolean);
+      `Service  ${weightBases[serviceBasis]} / ${num(weights[serviceBasis],3)} kg x Rs. ${num(rate)}/kg`,
+      withMaterial&&`Material  ${weightBases[materialBasis]} / ${num(weights[materialBasis],3)} kg x Rs. ${num(materialRate)}/kg`].filter(Boolean);
     const lines=details.flatMap(line=>doc.splitTextToSize(line,178));
     doc.text(lines,16,46);
-    autoTable(doc,{startY:51+lines.length*4,margin:{left:16,right:16},head:[['Piece','Size (mm)','Weight (kg)','Amount (INR)']],
-      body:layout.parts.map(part=>[clean(part.name),`${num(part.width)} x ${num(part.height)}`,num(weight(part),3),num(cost(part),2)]),
-      foot:[['Total','','',num(placedCost,2)]],showFoot:'lastPage',headStyles:{fillColor:[41,87,66]},footStyles:{fillColor:[41,87,66]}});
+    autoTable(doc,{startY:51+lines.length*4,margin:{left:16,right:16},head:[['Piece','Size (mm)','Weight (kg)']],
+      body:layout.parts.map(part=>[clean(part.name),`${num(part.width)} x ${num(part.height)}`,num(weight(part),3)]),
+      headStyles:{fillColor:[41,87,66]}});
+    autoTable(doc,{startY:doc.lastAutoTable.finalY+8,margin:{left:16,right:16},head:[['Charge','Weight basis','Amount (INR)']],
+      body:[['Shearing service',weightBases[serviceBasis],num(serviceTotal,2)],
+        ...(withMaterial?[['Material',weightBases[materialBasis],num(materialTotal,2)]]:[])],
+      foot:[['Total','',num(placedCost,2)]],showFoot:'lastPage',headStyles:{fillColor:[41,87,66]},footStyles:{fillColor:[41,87,66]}});
     doc.save('shearing-quotation.pdf');
   }
   return <section className="business-page">
     <h1>Shearing</h1>
-    <p>Nest rectangular parts on a mother sheet. Each placed piece is priced by its finished weight.</p>
+    <p>Nest rectangular parts and choose which weight to charge for service and supplied material.</p>
     <div className="business-card business-grid">
       <label>Client<input value={client} onChange={e=>setClient(e.target.value)}/></label>
       <label>Job reference<input value={reference} onChange={e=>setReference(e.target.value)}/></label>
@@ -120,8 +135,10 @@ export default function Shearing({settings}){
       <label>Material<select value={material} onChange={e=>setMaterial(e.target.value)}>{Object.entries(settings.materials).map(([id,item])=><option key={id} value={id}>{item.name}</option>)}</select></label>
       <label>Thickness (mm)<input type="number" value={thickness} onChange={e=>setThickness(inputNumber(e))}/></label>
       <label>Shearing service rate (₹/kg)<input type="number" min="0" step="any" value={rate} onChange={e=>setRate(inputNumber(e))}/></label>
+      <label>Apply service rate to<select value={serviceBasis} onChange={e=>setServiceBasis(e.target.value)}>{Object.entries(weightBases).map(([key,label])=><option key={key} value={key}>{label}</option>)}</select></label>
       <label><input type="checkbox" checked={withMaterial} onChange={e=>setWithMaterial(e.target.checked)}/> With material</label>
       {withMaterial&&<label>Material purchase rate (₹/kg)<input type="number" min="0" step="any" value={materialRate} onChange={e=>setMaterialRate(inputNumber(e))}/></label>}
+      {withMaterial&&<label>Apply material rate to<select value={materialBasis} onChange={e=>setMaterialBasis(e.target.value)}>{Object.entries(weightBases).map(([key,label])=><option key={key} value={key}>{label}</option>)}</select></label>}
     </div>
     <section className="business-card">
       <h2>Parts to cut</h2>
@@ -187,15 +204,15 @@ export default function Shearing({settings}){
       <div className="business-metrics">
         <span>Placed pieces<b>{layout.parts.length}</b></span>
         <span>Sheet used<b>{num(100*(1-remnants.reduce((sum,rect)=>sum+rect.width*rect.height,0)/(sheet.width*sheet.height)),1)}%</b></span>
-        {validCost&&<><span>Placed weight<b>{num(layout.parts.reduce((sum,part)=>sum+weight(part),0),3)} kg</b></span>
-          <span>Shearing service<b>{money(layout.parts.reduce((sum,part)=>sum+serviceCost(part),0))}</b></span>
-          {withMaterial&&<span>Material cost<b>{money(layout.parts.reduce((sum,part)=>sum+metalCost(part),0))}</b></span>}
-          <span>Placed parts total<b>{money(placedCost)}</b></span></>}
+        {validWeight&&Object.entries(weightBases).map(([key,label])=><span key={key}>{label} weight<b>{num(weights[key],3)} kg</b></span>)}
+        {validCost&&<><span>Service · {weightBases[serviceBasis]}<b>{money(serviceTotal)}</b></span>
+          {withMaterial&&<span>Material · {weightBases[materialBasis]}<b>{money(materialTotal)}</b></span>}
+          <span>Total estimate<b>{money(placedCost)}</b></span></>}
       </div>
       {!validCost&&<p role="alert">Enter a positive thickness, a nonnegative service rate, and a positive material rate if supplying metal.</p>}
       {layout.unplaced.length>0&&<p role="alert">Unplaced pieces ({layout.unplaced.length}). {layout.unplaced.map(part=>part.name+' '+dimensions(part)).join(', ')}</p>}
       <div className="business-table"><table>
-        <thead><tr><th>Placed piece</th><th>Size</th><th>X / Y (mm)</th><th>Weight</th><th>Total</th></tr></thead>
+        <thead><tr><th>Placed piece</th><th>Size</th><th>X / Y (mm)</th><th>Weight</th><th>Value at job weight</th></tr></thead>
         <tbody>{layout.parts.map((part,index)=><tr key={part.id}><td>{index+1}. {part.name}</td><td>{dimensions(part)}</td>
           <td>{num(part.x)} / {num(part.y)}</td><td>{validCost?num(weight(part),3)+' kg':'—'}</td><td>{validCost?money(cost(part)):'—'}</td></tr>)}</tbody>
       </table></div>
@@ -203,7 +220,7 @@ export default function Shearing({settings}){
       <ul>{remnants.map((rect,i)=><li key={i}>{dimensions(rect)} at {num(rect.x)}, {num(rect.y)} mm</li>)}</ul>
       <div className="business-bar"><button disabled={!validCost} onClick={exportLayout}>Download layout CSV</button>
         <button disabled={!validCost||layout.unplaced.length>0} onClick={exportQuote}>Download quotation PDF</button>
-        <button disabled={saving||!validCost||!remnants.length||layout.unplaced.length>0} onClick={saveRemnants}>Save remnants</button></div>
+        <button disabled={saving||!validWeight||!remnants.length||layout.unplaced.length>0} onClick={saveRemnants}>Save remnants</button></div>
     </section>}
     <section className="business-card">
       <h2>Saved remnants on this device</h2>

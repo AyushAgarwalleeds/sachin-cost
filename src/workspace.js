@@ -1,23 +1,38 @@
 import {curvePoint,curveLength} from './geometry.js';
+export function nameFileJobs(jobs,fileName){
+ const base=fileName.replace(/\.[^.]+$/,'');
+ return jobs.map((job,index)=>{
+  if(!/^Job \d+$/i.test(job.name)&&job.name!==job.autoName)return job;
+  const autoName=base+(jobs.length>1?' · '+String(index+1).padStart(2,'0'):'');
+  return {...job,name:autoName,autoName};
+ });
+}
 function signature(c){
  const p=t=>{const v=curvePoint(c,t);return `${v.x.toFixed(6)},${v.y.toFixed(6)}`;};
  return [c.kind,[p(0),p(.5),p(1)].sort().join('|'),curveLength(c).toFixed(6)].join(':');
 }
-export function tagResult(result,fileId){
+export function tagResult(result,fileId,fileName){
  const prefix=fileId+'|',known=new Map();
  const tag=c=>{const key=signature(c);let id=c.id;if(!id)id=known.get(key)||crypto.randomUUID();if(!id.startsWith(prefix))id=prefix+id;known.set(key,id);const sourceId=c.sourceId||id;return {...c,id,sourceId:sourceId.startsWith(prefix)?sourceId:prefix+sourceId};};
- const curves=(result.curves||[]).map(tag),jobs=(result.jobs||[]).map(j=>({...j,fileId,curves:j.curves.map(tag),contours:j.contours.map(c=>({...c,curves:c.curves.map(tag)}))}));
+ const curves=(result.curves||[]).map(tag),tagged=(result.jobs||[]).map(j=>({...j,fileId,curves:j.curves.map(tag),contours:j.contours.map(c=>({...c,curves:c.curves.map(tag)}))})),jobs=fileName?nameFileJobs(tagged,fileName):tagged;
  const importErrors=result.importErrors||result.errors?.filter(e=>!/branching cut network|Intersecting, touching|No supported cutting|Overlapping outlines/.test(e))||[];
  const tagId=id=>id.startsWith(prefix)?id:prefix+id;
   return {...result,curves,jobs,importErrors,cutCurves:result.cutCurves?.map(tag),ignoredCurves:result.ignoredCurves?.map(tag),ignoredGroups:result.ignoredGroups?.map(g=>({...g,ids:g.ids.map(tagId)})),frameCandidates:result.frameCandidates?.map(g=>({...g,ids:g.ids.map(tagId)})),manualErrors:result.manualErrors?.map(g=>({...g,ids:g.ids.map(tagId)})),repairCandidates:result.repairCandidates?.map(g=>({...g,ids:g.ids.map(tagId)})),topologyIssueIds:result.topologyIssueIds?.map(tagId),annotations:result.annotations?.map(a=>({...a,id:tagId(a.id)}))};
 }
 export function migrateWorkspace(w){
  if(!w)return w;
- const files=w.files.map(f=>({...f,result:tagResult(f.result,f.id)}));
+ const files=w.files.map(f=>({...f,result:tagResult(f.result,f.id,f.name)}));
  const jobs=w.jobs.map(j=>{
   const file=files.find(f=>f.id===j.fileId)||files.find(f=>f.result.jobs.some(v=>v.id===j.id));
   return file?.result.jobs.find(v=>v.id===j.id)?{...file.result.jobs.find(v=>v.id===j.id),...Object.fromEntries(Object.entries(j).filter(([key])=>!['curves','contours','fileId'].includes(key))),fileId:file.id}:tagResult({jobs:[j],curves:j.curves},j.fileId||w.id).jobs[0];
- }).map((j,i)=>/^Job \d+$/.test(j.name)?{...j,name:'Job '+String(i+1).padStart(2,'0')}:j);return {...w,files,jobs};
+ });
+ const named=jobs.map(job=>{
+  const file=files.find(f=>f.id===job.fileId);
+  if(!file)return job;
+  const siblings=jobs.filter(j=>j.fileId===file.id);
+  return nameFileJobs(siblings,file.name).find(j=>j.id===job.id)||job;
+ });
+ return {...w,files,jobs:named};
 }
 const INPUTS=['name','material','thickness','quantity','kgRate','weightOverride','lengthOverride','piercingsOverride','included'];
 export function preserveJobInputs(jobs,previous,defaultThickness=10,{preserveUnmatched=false}={}){
@@ -30,7 +45,7 @@ export function preserveJobInputs(jobs,previous,defaultThickness=10,{preserveUnm
   if(!best||score<.45)return {...j,...(preserveUnmatched?{}:{thickness:defaultThickness}),reviewed:false};used.add(best.id);
   const areaMatches=j.area===null?best.area===null:best.area!==null&&Math.abs(j.area-best.area)<Math.max(.00001,Math.abs(j.area)*1e-9);
   const exact=score===1&&Math.abs(j.length-best.length)<1e-6&&j.piercings===best.piercings&&areaMatches;
-  return {...j,...Object.fromEntries(INPUTS.map(k=>[k,best[k]])),name:/^Job \d+$/.test(best.name)?j.name:best.name,...(j.pdfSource&&exact?{pdfScale:best.pdfScale}:{}),...(exact?{reviewed:best.reviewed}:{reviewed:false,lengthOverride:null,piercingsOverride:null,weightOverride:null})};
+  return {...j,...Object.fromEntries(INPUTS.map(k=>[k,best[k]])),name:/^Job \d+$/.test(best.name)||best.name===best.autoName?j.name:best.name,...(j.pdfSource&&exact?{pdfScale:best.pdfScale}:{}),...(exact?{reviewed:best.reviewed}:{reviewed:false,lengthOverride:null,piercingsOverride:null,weightOverride:null})};
  });
 }
 export function mergeProjectHistory(previous,incoming,current){const projects=[...previous,...incoming,...current];return projects.filter((p,i)=>projects.findIndex(other=>other.id===p.id)===i).slice(0,50);}

@@ -1,62 +1,102 @@
 import React,{useState} from 'react';
-import {money,num,roundMoney} from './costing.js';
+import {money,num} from './costing.js';
 import {downloadBlob} from './storage.js';
 import {csvCell} from './csv.js';
+import {exportDxf} from './geometry.js';
+import {calculateBending,bendingPattern} from './bending.js';
+import FlatPattern from './FlatPattern.jsx';
 
-const newBend=()=>({id:crypto.randomUUID(),angle:90,radius:2,length:100,count:1,direction:'Up'});
-const fields={angle:'Bend angle (°)',radius:'Inside radius (mm)',length:'Bend line length (mm)',count:'Repeats per part'};
-const whole=value=>Number.isSafeInteger(value)&&value>0;
-const nonnegative=value=>Number.isFinite(value)&&value>=0;
+const newBend=(direction='Up')=>({id:crypto.randomUUID(),angle:90,radius:2,length:100,count:1,direction,deduction:''});
+const fields={angle:'Turn from flat (°)',radius:'Inside radius (mm)',length:'Bend line length (mm)',count:'Repeats per part',deduction:'Measured deduction (optional mm)'};
+const presets={L:['Up'],U:['Up','Up'],Z:['Up','Down'],Hat:['Down','Up','Up','Down']};
+const number=e=>e.target.value===''?'':Number(e.target.value);
 
-function BendSketch({bend}){
-  const angle=bend.angle*Math.PI/180*(bend.direction==='Up'?-1:1);
-  const end={x:70+44*Math.cos(angle),y:52+44*Math.sin(angle)};
-  return <svg className="bend-sketch" viewBox="0 0 126 104" role="img" aria-label={`${bend.angle} degree bend ${bend.direction.toLowerCase()}`}>
-    <path d="M16 52 H114" stroke="#90a89d" strokeDasharray="4 4"/>
-    <path d={`M16 52 H70 L${end.x} ${end.y}`} fill="none" stroke="#316695" strokeWidth="4" strokeLinejoin="round"/>
-    <circle cx="70" cy="52" r="3" fill="#316695"/>
-  </svg>;
+function FoldedPreview({flanges,operations}){
+ let angle=0,point={x:0,y:0};
+ const points=[point];
+ flanges.forEach((length,i)=>{
+  point={x:point.x+length*Math.cos(angle),y:point.y+length*Math.sin(angle)};points.push(point);
+  if(operations[i])angle+=operations[i].angle*Math.PI/180*(operations[i].direction==='Up'?1:-1);
+ });
+ const xs=points.map(p=>p.x),ys=points.map(p=>p.y),x=Math.min(...xs),y=Math.max(...ys),w=Math.max(...xs)-x,h=y-Math.min(...ys),s=Math.max(w,h),m=s*.18;
+ return <svg className="flat-pattern folded-profile" role="img" aria-label="Folded profile schematic with flange dimensions" viewBox={`${x-m} ${-y-m} ${w+2*m} ${h+2*m}`}>
+  <path d={points.map((p,i)=>`${i?'L':'M'}${p.x},${-p.y}`).join(' ')} fill="none" stroke="#326e59" strokeWidth="4" vectorEffect="non-scaling-stroke"/>
+  {flanges.map((length,i)=><text key={i} x={(points[i].x+points[i+1].x)/2} y={-(points[i].y+points[i+1].y)/2-s*.045}
+   fontSize={s/25} textAnchor="middle">{num(length)} mm</text>)}
+ </svg>;
 }
 
-export default function Bending({settings}){
-  const [job,setJob]=useState({name:'',thickness:settings.defaultThickness,straight:100,k:.4,quantity:1,rate:0,setup:0});
-  const [bends,setBends]=useState(()=>[newBend()]);
-  const set=(key,value)=>setJob(previous=>({...previous,[key]:value}));
-  const number=e=>e.target.value===''?'':Number(e.target.value);
-  const valid=nonnegative(job.straight)&&Number.isFinite(job.thickness)&&job.thickness>0&&whole(job.quantity)&&
-    nonnegative(job.k)&&job.k<=1&&nonnegative(job.rate)&&nonnegative(job.setup)&&
-    bends.every(bend=>nonnegative(bend.radius)&&Number.isFinite(bend.length)&&bend.length>0&&Number.isFinite(bend.angle)&&bend.angle>0&&bend.angle<180&&whole(bend.count));
-  const allowance=bend=>(bend.radius+job.k*job.thickness)*bend.angle*Math.PI/180;
-  const developed=job.straight+bends.reduce((sum,bend)=>sum+allowance(bend)*bend.count,0);
-  const strokes=bends.reduce((sum,bend)=>sum+bend.count,0)*job.quantity;
-  const total=roundMoney(strokes*job.rate+job.setup);
-  const exportCsv=()=>{
-    const rows=[['Job','Bend','Direction','Angle degrees','Inside radius mm','Bend line length mm','Repeats per part','Allowance mm per bend'],
-      ...bends.map((bend,index)=>[job.name,index+1,bend.direction,bend.angle,bend.radius,bend.length,bend.count,allowance(bend)]),
-      [],['Quantity','Developed length mm per part','Total bends','Rate INR per bend','Setup INR','Total INR'],
-      [job.quantity,developed,strokes,job.rate,job.setup,total]];
-    downloadBlob(new Blob([rows.map(row=>row.map(csvCell).join(',')).join('\r\n')],{type:'text/csv'}),'bending-work-sheet.csv');
-  };
-  return <section className="business-page">
-    <h1>Bending</h1>
-    <p>Plan bend operations, calculate developed blank length and estimate press brake charges.</p>
-    <div className="business-card business-grid">
-      <label>Job reference<input value={job.name} onChange={e=>set('name',e.target.value)}/></label>
-      {Object.entries({thickness:'Thickness (mm)',straight:'Total straight length (mm)',k:'K-factor',quantity:'Quantity',rate:'Rate (₹ per bend)',setup:'Setup fee (₹)'}).map(([key,label])=>
-        <label key={key}>{label}<input type="number" step="any" value={job[key]} onChange={e=>set(key,number(e))}/></label>)}
+export default function Bending({settings,onOpenCad}){
+ const [job,setJob]=useState({name:'',thickness:settings.defaultThickness,straight:100,k:.4,quantity:1,rate:0,setup:0,minimum:0,mode:'outside',rateMode:'bend'});
+ const [bends,setBends]=useState(()=>[newBend()]),[flanges,setFlanges]=useState([100,50]),[blankWidth,setBlankWidth]=useState(100);
+ const [message,setMessage]=useState('');
+ const set=(key,value)=>setJob(previous=>({...previous,[key]:value}));
+ function changeBends(next){
+  setBends(next);
+  const count=next.reduce((sum,b)=>sum+(Number.isSafeInteger(b.count)&&b.count>0?Math.min(100,b.count):1),0);
+  setFlanges(previous=>Array.from({length:Math.min(101,count+1)},(_,i)=>previous[i]??50));
+ }
+ let result,error,curves,patternError;
+ try{result=calculateBending(job,bends,flanges);}catch(e){error=e.message;}
+ if(result&&job.mode==='outside')try{curves=bendingPattern(result,blankWidth);}catch(e){patternError=e.message;}
+ function exportCsv(){
+  const rows=[['Job',job.name],['Dimension method',job.mode],['K-factor',job.k],['Thickness mm',job.thickness],
+   ['Bend','Direction','Turn degrees','Inside radius mm','Bend length mm','Allowance mm','Deduction mm','Bend centre from left mm'],
+   ...result.operations.map((bend,i)=>[i+1,bend.direction,bend.angle,bend.radius,bend.length,bend.allowance,bend.deduction,result.positions[i]??'']),
+   [],['Quantity','Developed length mm per part','Total strokes','Rate basis','Rate INR','Setup INR','Total INR'],
+   [job.quantity,result.developed,result.strokes,job.rateMode,job.rate,job.setup,result.total]];
+  downloadBlob(new Blob([rows.map(row=>row.map(csvCell).join(',')).join('\r\n')],{type:'text/csv'}),'bending-work-sheet.csv');
+ }
+ return <section className="business-page">
+  <h1>Bending planner</h1>
+  <p>Set the profile, flange dimensions and shop bend data to calculate the blank and press brake charges.</p>
+  <section className="business-card">
+   <div className="business-bar"><strong>Start with a profile</strong>{Object.entries(presets).map(([name,directions])=><button key={name} onClick={()=>{
+    changeBends(directions.map(direction=>newBend(direction)));set('mode','outside');setMessage(name+' profile loaded. Set its flange lengths below.');
+   }}>{name} profile</button>)}</div>
+   {message&&<p role="status">{message}</p>}
+   <div className="business-grid">
+    <label>Job reference<input value={job.name} onChange={e=>set('name',e.target.value)}/></label>
+    <label>Dimension method<select value={job.mode} onChange={e=>set('mode',e.target.value)}><option value="outside">Outside flange dimensions</option><option value="tangent">Sum of tangent straight lengths</option></select></label>
+    {Object.entries({thickness:'Thickness (mm)',k:'K-factor',quantity:'Quantity',rate:'Service rate (₹)',minimum:'Minimum charge per part (₹)',setup:'Setup charge once (₹)'}).map(([key,label])=><label key={key}>{label}<input type="number" step="any" value={job[key]} onChange={e=>set(key,number(e))}/></label>)}
+    <label>Service rate applies per<select value={job.rateMode} onChange={e=>set('rateMode',e.target.value)}><option value="bend">Bend stroke</option><option value="metre">Metre of bend line</option></select></label>
+    {job.mode==='tangent'&&<label>Total tangent straight length (mm)<input type="number" step="any" value={job.straight} onChange={e=>set('straight',number(e))}/></label>}
+    {job.mode==='outside'&&<label>Blank width across bends (mm)<input type="number" step="any" value={blankWidth} onChange={e=>{
+     const value=number(e);setBlankWidth(value);setBends(previous=>previous.map(bend=>({...bend,length:value})));
+    }}/></label>}
+   </div>
+   <p>Measure outside flange dimensions to the virtual sharp corners. Bend angles are turns from flat. Set the K-factor or a measured deduction for your material and tooling.</p>
+   {job.mode==='outside'&&<div className="business-grid">{flanges.map((length,i)=><label key={i}>Flange {i+1} outside (mm)<input type="number" step="any" value={length} onChange={e=>setFlanges(flanges.map((value,index)=>index===i?number(e):value))}/></label>)}</div>}
+  </section>
+  <section className="business-card">
+   <h2>Bend schedule</h2>
+   {bends.map((bend,index)=><fieldset key={bend.id}><legend>Bend {index+1}</legend><div className="business-grid">
+    {Object.entries(fields).map(([key,label])=><label key={key}>{label}<input type="number" step="any" value={bend[key]} onChange={e=>changeBends(bends.map(item=>item.id===bend.id?{...item,[key]:number(e)}:item))}/></label>)}
+    <label>Direction<select value={bend.direction} onChange={e=>changeBends(bends.map(item=>item.id===bend.id?{...item,direction:e.target.value}:item))}><option>Up</option><option>Down</option></select></label>
+    <button disabled={bends.length===1} onClick={()=>changeBends(bends.filter(item=>item.id!==bend.id))}>Remove bend {index+1}</button>
+   </div></fieldset>)}
+   <button onClick={()=>changeBends([...bends,newBend()])}>Add bend</button>
+   {error&&<p role="alert">{error}</p>}
+   {result&&!error&&<>
+    <div className="business-metrics">
+     <span>Developed length per part<b>{num(result.developed,3)} mm</b></span><span>Total allowance<b>{num(result.totalAllowance,3)} mm</b></span>
+     <span>Total deduction<b>{num(result.totalDeduction,3)} mm</b></span><span>Total strokes<b>{result.strokes}</b></span>
+     <span>Bend line per part<b>{num(result.metres,3)} m</b></span><span>Unit service cost<b>{money(result.unit)}</b></span><span>Total cost<b>{money(result.total)}</b></span>
     </div>
-    <section className="business-card">
-      <h2>Bend schedule</h2>
-      <p>Enter the angle the sheet turns from flat. Measure the straight sections between bend tangency points. The default K-factor is 0.40. Set it to your shop’s value for the material and tooling.</p>
-      {bends.map((bend,index)=><fieldset key={bend.id}><legend>Bend {index+1}</legend><div className="business-grid">
-        {Object.entries(fields).map(([key,label])=><label key={key}>{label}<input type="number" step="any" value={bend[key]} onChange={e=>setBends(bends.map(item=>item.id===bend.id?{...item,[key]:number(e)}:item))}/></label>)}
-        <label>Direction<select value={bend.direction} onChange={e=>setBends(bends.map(item=>item.id===bend.id?{...item,direction:e.target.value}:item))}><option>Up</option><option>Down</option></select></label>
-        <button disabled={bends.length===1} onClick={()=>setBends(bends.filter(item=>item.id!==bend.id))}>Remove bend {index+1}</button>
-      </div>{valid&&<div className="business-bar"><BendSketch bend={bend}/><p>Bend allowance {num(allowance(bend),3)} mm per bend</p></div>}</fieldset>)}
-      <div className="business-bar"><button onClick={()=>setBends([...bends,newBend()])}>Add bend</button><button disabled={!valid} onClick={exportCsv}>Download work sheet CSV</button></div>
-      {valid?<div className="business-metrics"><span>Developed length per part<b>{num(developed,3)} mm</b></span>
-        <span>Total bends<b>{strokes}</b></span><span>Total bending cost<b>{money(total)}</b></span></div>:
-        <p role="alert">Check dimensions, bend angles between 0° and 180°, K-factor from 0 to 1, and whole quantities.</p>}
-    </section>
-  </section>;
+    {job.mode==='outside'&&<>
+     <h2>Folded profile · schematic</h2><FoldedPreview flanges={flanges} operations={result.operations}/>
+     {curves&&<><h2>Developed blank</h2><FlatPattern curves={curves} label="Developed blank with blue bend lines"/>
+      <p>Blue lines mark bend centres. Check the first folded sample against your shop’s bend data before production.</p></>}
+     {patternError&&<p role="alert">{patternError}</p>}
+     <div className="business-table"><table><thead><tr><th>Bend</th><th>Centre from left edge</th><th>Direction</th></tr></thead><tbody>
+      {result.positions.map((position,i)=><tr key={i}><td>{i+1}</td><td>{num(position,3)} mm</td><td>{result.operations[i].direction}</td></tr>)}
+     </tbody></table></div>
+    </>}
+    <div className="business-bar"><button onClick={exportCsv}>Download work sheet CSV</button>
+     {curves&&<><button onClick={()=>downloadBlob(new Blob([exportDxf({curves})],{type:'application/dxf'}),'bending-blank-mm.dxf')}>Download blank DXF</button>
+      <button onClick={()=>onOpenCad({name:job.name||'Bending blank',curves})}>Open blank in CAD</button></>}
+    </div>
+   </>}
+  </section>
+ </section>;
 }

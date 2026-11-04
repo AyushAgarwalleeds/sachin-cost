@@ -111,3 +111,9 @@ export function nestSheet(sheet,rows,allowRotation=true){
 }
 
 export const sheetWeight=(rect,thickness,density)=>area(rect)*thickness*density/1e9;
+
+export function shearingWeights(sheet,parts,thickness,density){
+ const total=sheetWeight(sheet,thickness,density);
+ const cut=parts.reduce((sum,part)=>sum+sheetWeight(part,thickness,density),0);
+ return {parts:cut,sheet:total,remnants:Math.max(0,total-cut)};
+}
